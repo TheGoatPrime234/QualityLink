@@ -510,10 +510,12 @@ Future<void> _offerFile(String filePath, String targetId) async {
       if (res.statusCode == 200) {
         _activeOperations.remove(transferId);
         // ✅ NUR HIER Notification (Upload fertig)
+        await _reportTransferEvent(transferId, "completed", "Upload via Relay");
         await OverlayForegroundService.showCompletionNotification("☁️ Upload completed!");
         _showSnack("✅ Upload Done");
       }
     } catch (e) {
+      await _reportTransferEvent(transferId, "failed", "P2P connection error");
       _showSnack("Upload Fail: $e", isError: true);
     } finally {
       setState(() => _isProcessing = false);
@@ -587,54 +589,59 @@ Future<void> _offerFile(String filePath, String targetId) async {
   }
 
   Future<bool> _tryP2PDownload(String url, File target) async {
-    try {
-      if (mounted) {
-        setState(() {
-          _isProcessing = true;
-          _processingStatus = "Downloading (P2P)...";
-          _progressMode = ProgressBarMode.p2p;
-          _progressValue = 0.0;
-        });
-      }
-
-      // Service starten aber KEINE Notification während Download
-      await _ensureServiceStarted(showNotification: false);
-
-      final request = http.Request('GET', Uri.parse(url));
-      final response = await http.Client().send(request).timeout(const Duration(seconds: 120));
-
-      if (response.statusCode == 200) {
-        final sink = target.openWrite();
-        int rx = 0;
-        int? tot = response.contentLength;
-
-        await for (var c in response.stream) {
-          sink.add(c);
-          rx += c.length;
-
-          if (mounted && tot != null) {
-            setState(() {
-              _progressValue = rx / tot!;
-              _progressSubtitle = "${(rx / 1024 / 1024).toStringAsFixed(1)} MB";
-            });
-            // Keine Notifications während Download
-          }
-        }
-
-        await sink.close();
-        // ✅ NUR HIER Notification (Download fertig)
-        await OverlayForegroundService.showCompletionNotification(
-          "✅ Downloaded: ${p.basename(target.path)}"
-        );
-        return true;
-      }
-    } catch (e) {
-      print("P2P Fail: $e");
-    } finally {
-      setState(() => _isProcessing = false);
+  try {
+    if (mounted) {
+      setState(() {
+        _isProcessing = true;
+        _processingStatus = "Downloading (P2P)...";
+        _progressMode = ProgressBarMode.p2p;
+        _progressValue = 0.0;
+      });
     }
-    return false;
+
+    await _ensureServiceStarted(showNotification: false);
+
+    final request = http.Request('GET', Uri.parse(url));
+    final response = await http.Client().send(request).timeout(const Duration(seconds: 120));
+
+    if (response.statusCode == 200) {
+      final sink = target.openWrite();
+      int rx = 0;
+      int? tot = response.contentLength;
+
+      await for (var c in response.stream) {
+        sink.add(c);
+        rx += c.length;
+
+        if (mounted && tot != null) {
+          setState(() {
+            _progressValue = rx / tot!;
+            _progressSubtitle = "${(rx / 1024 / 1024).toStringAsFixed(1)} MB";
+          });
+        }
+      }
+
+      await sink.close();
+      
+      // ✅ Report hinzufügen
+      final transferId = _transfers.firstWhere(
+        (t) => t['meta']['direct_link'] == url,
+        orElse: () => {'meta': {'transfer_id': 'unknown'}}
+      )['meta']['transfer_id'];
+      await _reportTransferEvent(transferId, "completed", "via P2P");
+      
+      await OverlayForegroundService.showCompletionNotification(
+        "✅ Downloaded: ${p.basename(target.path)}"
+      );
+      return true;
+    }
+  } catch (e) {
+    print("P2P Fail: $e");
+  } finally {
+    setState(() => _isProcessing = false);
   }
+  return false;
+}
 
   Future<void> _downloadFromRelay(String tid, File target) async {
     try {
@@ -673,6 +680,7 @@ Future<void> _offerFile(String filePath, String targetId) async {
 
         await sink.close();
         // ✅ NUR HIER Notification (Download fertig)
+        await _reportTransferEvent(tid, "completed", "via Relay");
         await OverlayForegroundService.showCompletionNotification(
           "✅ Downloaded: ${p.basename(target.path)}"
         );
@@ -711,6 +719,22 @@ Future<void> _offerFile(String filePath, String targetId) async {
           backgroundColor: isError ? Colors.red : const Color(0xFF00FF41).withValues(alpha: 0.3),
         ),
       );
+    }
+  }
+  Future<void> _reportTransferEvent(String transferId, String event, String details) async {
+    try {
+      await http.post(
+        Uri.parse('$serverBaseUrl/transfer/report'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "transfer_id": transferId,
+          "client_id": widget.clientId,
+          "event": event,
+          "details": details,
+        }),
+      );
+    } catch (e) {
+      print("Report Error: $e");
     }
   }
 
