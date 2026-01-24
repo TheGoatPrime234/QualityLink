@@ -7,7 +7,7 @@ import 'package:http/http.dart' as http;
 import '../config/server_config.dart';
 
 // =============================================================================
-// SYSTEM MONITOR SCREEN - MODULE 2 (Enhanced with Dev/Normal Modes)
+// SYSTEM MONITOR SCREEN - MODULE 2 (Enhanced with Dev/Normal Modes + Admin)
 // =============================================================================
 class SystemMonitorScreen extends StatefulWidget {
   const SystemMonitorScreen({super.key});
@@ -23,17 +23,33 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
   
   // Settings
   bool _autoScroll = true;
-  bool _devMode = false; // Toggle zwischen "Normal" und "Dev"
+  bool _devMode = false;
+  
+  // Storage Info
+  Map<String, dynamic>? _storageInfo;
+  Timer? _storageTimer;
+  
+  // Active Devices
+  List<dynamic> _activeDevices = [];
+  int _totalDevices = 0;
+  int _onlineDevices = 0;
 
   @override
   void initState() {
     super.initState();
     _startLogStream();
+    _fetchStorageInfo();
+    _storageTimer = Timer.periodic(const Duration(seconds: 5), (t) {
+      _fetchStorageInfo();
+      _fetchActiveDevices();
+    });
+    _fetchActiveDevices();
   }
 
   @override
   void dispose() {
     _logTimer?.cancel();
+    _storageTimer?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
@@ -45,15 +61,12 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
 
   Future<void> _fetchLogs() async {
     try {
-      // Wir laden immer die rohen Logs, filtern tun wir in der UI
-      final response = await http.get(
-          Uri.parse('$serverBaseUrl/logs?lines=100'));
+      final response = await http.get(Uri.parse('$serverBaseUrl/logs?lines=100'));
       if (response.statusCode == 200 && mounted) {
         final newLines = LineSplitter.split(response.body)
               .where((l) => l.trim().isNotEmpty)
               .toList();
 
-        // Nur setState machen, wenn sich was geändert hat (Performance)
         if (newLines.length != _logLines.length || 
             (newLines.isNotEmpty && newLines.last != _logLines.last)) {
           
@@ -62,7 +75,6 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
           });
 
           if (_autoScroll && _scrollController.hasClients) {
-            // Kleiner Delay, damit die Liste Zeit hat zu rendern
             Future.delayed(const Duration(milliseconds: 100), () {
               if (_scrollController.hasClients) {
                 _scrollController.animateTo(
@@ -77,7 +89,6 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
       }
     } catch (e) {
       if (mounted) {
-        // Fehler nur einmal anhängen, nicht spammen
         if (!_logLines.last.contains("CONNECTION LOST")) {
            setState(() => _logLines.add("CONNECTION LOST: $e"));
         }
@@ -85,20 +96,539 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
     }
   }
 
-  // --- LOGIC: NORMAL MODE FILTERING ---
+  Future<void> _fetchStorageInfo() async {
+    try {
+      final response = await http.get(Uri.parse('$serverBaseUrl/storage/info'));
+      if (response.statusCode == 200 && mounted) {
+        setState(() {
+          _storageInfo = json.decode(response.body);
+        });
+      }
+    } catch (e) {
+      // Silently fail
+    }
+  }
+
+  Future<void> _fetchActiveDevices() async {
+    try {
+      final response = await http.get(Uri.parse('$serverBaseUrl/admin/devices'));
+      if (response.statusCode == 200 && mounted) {
+        final data = json.decode(response.body);
+        setState(() {
+          _activeDevices = data['devices'];
+          _totalDevices = data['total_devices'];
+          _onlineDevices = data['online_devices'];
+        });
+      }
+    } catch (e) {
+      // Silently fail
+    }
+  }
+
+  // --- ADMIN ACTIONS ---
   
-  // Entscheidet, ob eine Zeile im Normal-Modus überhaupt gezeigt wird
+  Future<void> _clearLogs() async {
+    final confirm = await _showConfirmDialog(
+      "Clear Logs?",
+      "This will delete all log entries from the server.",
+    );
+    if (!confirm) return;
+
+    try {
+      final response = await http.post(Uri.parse('$serverBaseUrl/admin/clear_logs'));
+      if (response.statusCode == 200 && mounted) {
+        setState(() => _logLines = ["Logs cleared."]);
+        _showSnackBar("✅ Logs cleared successfully", isError: false);
+      }
+    } catch (e) {
+      _showSnackBar("❌ Failed to clear logs: $e", isError: true);
+    }
+  }
+
+  Future<void> _clearTransfers() async {
+    final confirm = await _showConfirmDialog(
+      "Clear Transfer Files?",
+      "This will delete all relay transfer files from the server storage.\n\n${_storageInfo?['stored_files'] ?? '?'} files will be deleted.",
+    );
+    if (!confirm) return;
+
+    try {
+      final response = await http.post(Uri.parse('$serverBaseUrl/admin/clear_transfers'));
+      if (response.statusCode == 200 && mounted) {
+        final data = json.decode(response.body);
+        _showSnackBar(
+          "✅ Deleted ${data['deleted_files']} files (${data['freed_mb']} MB freed)",
+          isError: false,
+        );
+        _fetchStorageInfo();
+      }
+    } catch (e) {
+      _showSnackBar("❌ Failed to clear transfers: $e", isError: true);
+    }
+  }
+
+  Future<void> _clearAll() async {
+    final confirm = await _showConfirmDialog(
+      "Clear Everything?",
+      "This will delete:\n• All logs\n• All transfer files (${_storageInfo?['stored_files'] ?? '?'} files)\n\nThis cannot be undone!",
+      isDangerous: true,
+    );
+    if (!confirm) return;
+
+    try {
+      final response = await http.post(Uri.parse('$serverBaseUrl/admin/clear_all'));
+      if (response.statusCode == 200 && mounted) {
+        final data = json.decode(response.body);
+        setState(() => _logLines = ["System cleared."]);
+        _showSnackBar(
+          "✅ Everything cleared! ${data['transfers']['freed_mb']} MB freed",
+          isError: false,
+        );
+        _fetchStorageInfo();
+      }
+    } catch (e) {
+      _showSnackBar("❌ Failed to clear: $e", isError: true);
+    }
+  }
+
+  Future<void> _kickDevice(String clientId, String deviceName) async {
+    final confirm = await _showConfirmDialog(
+      "Kick Device?",
+      "This will disconnect '$deviceName' from the server.\n\nThey can reconnect immediately.",
+    );
+    if (!confirm) return;
+
+    try {
+      final response = await http.post(
+        Uri.parse('$serverBaseUrl/admin/kick_device'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({"client_id": clientId}),
+      );
+      
+      if (response.statusCode == 200 && mounted) {
+        _showSnackBar("✅ $deviceName kicked from server", isError: false);
+        _fetchActiveDevices();
+      }
+    } catch (e) {
+      _showSnackBar("❌ Failed to kick device: $e", isError: true);
+    }
+  }
+
+  void _showDeviceDetails(Map<String, dynamic> device) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Row(
+          children: [
+            Icon(
+              _getDeviceIcon(device['type']),
+              color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
+              size: 24,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                device['name'],
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildDetailRow("Status", device['online'] ? "🟢 Online" : "🔴 Offline"),
+            _buildDetailRow("Type", device['type']),
+            _buildDetailRow("IP Address", device['ip']),
+            _buildDetailRow("Client ID", device['client_id']),
+            _buildDetailRow("Last Seen", "${device['last_seen_ago']}s ago"),
+            const Divider(color: Colors.grey),
+            _buildDetailRow("Transfers Sent", "${device['transfers_sent']}", color: Colors.orange),
+            _buildDetailRow("Transfers Received", "${device['transfers_received']}", color: const Color(0xFF00E5FF)),
+            _buildDetailRow("Clipboard Entries", "${device['clipboard_entries']}", color: Colors.purple),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Close", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _kickDevice(device['client_id'], device['name']);
+            },
+            icon: const Icon(Icons.logout, size: 16),
+            label: const Text("Kick"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFF0055),
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value, {Color? color}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+          Text(
+            value,
+            style: TextStyle(
+              color: color ?? Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _getDeviceIcon(String type) {
+    switch (type.toLowerCase()) {
+      case 'android':
+        return Icons.phone_android;
+      case 'ios':
+        return Icons.phone_iphone;
+      case 'windows':
+        return Icons.computer;
+      case 'macos':
+        return Icons.laptop_mac;
+      case 'linux':
+        return Icons.desktop_mac;
+      default:
+        return Icons.devices;
+    }
+  }
+
+  Future<bool> _showConfirmDialog(String title, String message, {bool isDangerous = false}) async {
+    return await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Text(
+          title,
+          style: TextStyle(
+            color: isDangerous ? const Color(0xFFFF0055) : Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          message,
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: isDangerous ? const Color(0xFFFF0055) : const Color(0xFF00FF41),
+            ),
+            child: Text(
+              isDangerous ? "DELETE" : "Confirm",
+              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    ) ?? false;
+  }
+
+  void _showSnackBar(String message, {required bool isError}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? const Color(0xFFFF0055) : const Color(0xFF00FF41).withValues(alpha: 0.3),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _showAdminPanel() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0A0A0A),
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (context, scrollController) => SingleChildScrollView(
+          controller: scrollController,
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header
+                Row(
+                  children: [
+                    const Icon(Icons.admin_panel_settings, color: Color(0xFFFF0055), size: 28),
+                    const SizedBox(width: 12),
+                    const Text(
+                      "ADMIN PANEL",
+                      style: TextStyle(
+                        color: Color(0xFFFF0055),
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+
+                // Active Devices Section
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF151515),
+                    border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.3)),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            "ACTIVE DEVICES",
+                            style: TextStyle(
+                              color: Color(0xFF00E5FF),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF00FF41).withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              "$_onlineDevices / $_totalDevices online",
+                              style: const TextStyle(
+                                color: Color(0xFF00FF41),
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (_activeDevices.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Center(
+                            child: Text(
+                              "No devices connected",
+                              style: TextStyle(color: Colors.grey, fontSize: 12),
+                            ),
+                          ),
+                        )
+                      else
+                        ..._activeDevices.map((device) => _buildDeviceCard(device)),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Storage Info
+                if (_storageInfo != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF151515),
+                      border: Border.all(color: const Color(0xFF00FF41).withValues(alpha: 0.3)),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _storageInfo!['storage_type'] ?? 'Unknown',
+                          style: const TextStyle(
+                            color: Color(0xFF00FF41),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          "Storage: ${_storageInfo!['used_gb']} / ${_storageInfo!['total_gb']} GB (${_storageInfo!['usage_percent']}%)",
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                        Text(
+                          "Free: ${_storageInfo!['free_gb']} GB",
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                        Text(
+                          "Stored Files: ${_storageInfo!['stored_files']}",
+                          style: const TextStyle(color: Colors.orange, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
+                // Action Buttons
+                const Text(
+                  "MAINTENANCE",
+                  style: TextStyle(
+                    color: Colors.orange,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _buildAdminButton(
+                  "Clear Logs Only",
+                  Icons.delete_outline,
+                  _clearLogs,
+                  Colors.orange,
+                ),
+                const SizedBox(height: 10),
+                _buildAdminButton(
+                  "Clear Transfer Files",
+                  Icons.cloud_off,
+                  _clearTransfers,
+                  Colors.orange,
+                ),
+                const SizedBox(height: 10),
+                _buildAdminButton(
+                  "Clear Everything",
+                  Icons.warning,
+                  _clearAll,
+                  const Color(0xFFFF0055),
+                ),
+                const SizedBox(height: 20),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDeviceCard(Map<String, dynamic> device) {
+    return GestureDetector(
+      onTap: () => _showDeviceDetails(device),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F0F0F),
+          border: Border(
+            left: BorderSide(
+              color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
+              width: 3,
+            ),
+          ),
+          borderRadius: const BorderRadius.only(
+            topRight: Radius.circular(4),
+            bottomRight: Radius.circular(4),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              _getDeviceIcon(device['type']),
+              color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
+              size: 20,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    device['name'],
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                  Text(
+                    "${device['ip']} • ${device['type']}",
+                    style: const TextStyle(color: Colors.grey, fontSize: 10),
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  device['online'] ? "ONLINE" : "OFFLINE",
+                  style: TextStyle(
+                    color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  "↑${device['transfers_sent']} ↓${device['transfers_received']}",
+                  style: const TextStyle(color: Colors.grey, fontSize: 9),
+                ),
+              ],
+            ),
+            const SizedBox(width: 8),
+            Icon(
+              Icons.chevron_right,
+              color: Colors.grey.withValues(alpha: 0.5),
+              size: 16,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAdminButton(String label, IconData icon, VoidCallback onPressed, Color color) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        onPressed: () {
+          Navigator.pop(context);
+          onPressed();
+        },
+        icon: Icon(icon, size: 20),
+        label: Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color.withValues(alpha: 0.2),
+          foregroundColor: color,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          side: BorderSide(color: color.withValues(alpha: 0.5)),
+        ),
+      ),
+    );
+  }
+
+  // --- FILTERING LOGIC ---
+  
   bool _shouldShowInNormalMode(String line) {
-    if (line.contains("[CLEANUP]")) return false; // Interne Aufräumarbeiten ausblenden
-    if (line.contains("uvicorn")) return false;   // Server-Technik ausblenden
-    if (line.contains("Get all clipboard")) return false; // Pull Spam ausblenden
+    if (line.contains("[CLEANUP]")) return false;
+    if (line.contains("uvicorn")) return false;
+    if (line.contains("Get all clipboard")) return false;
     return true;
   }
 
-  // Hübscht die Zeile für den Normal-Modus auf
   String _formatForNormalMode(String line) {
-    // Entferne den Zeitstempel am Anfang (z.B. "2023-10-25 12:00:00,000 [INFO] ")
-    // Wir suchen nach dem ersten "]" und schneiden alles davor weg.
     int infoIndex = line.indexOf("] ");
     String content = line;
     
@@ -106,7 +636,6 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
       content = line.substring(infoIndex + 2);
     }
 
-    // Entferne weitere technische Tags
     content = content.replaceAll("[SYSTEM]", "").trim();
     content = content.replaceAll("[HYBRID]", "").trim();
     content = content.replaceAll("[CLIPBOARD]", "").trim();
@@ -126,13 +655,12 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
     return Icons.info_outline;
   }
 
-  // --- LOGIC: COLORS (Shared) ---
   Color _getLogColor(String line) {
     if (line.contains("[ERROR]") || line.contains("fail") || line.contains("verloren")) {
-      return const Color(0xFFFF0055); // Red
+      return const Color(0xFFFF0055);
     }
     if (line.contains("[HYBRID]") || line.contains("P2P")) {
-      return const Color(0xFF00E5FF); // Cyan
+      return const Color(0xFF00E5FF);
     }
     if (line.contains("UPLOAD") || line.contains("DOWNLOAD")) {
       return Colors.white;
@@ -141,14 +669,13 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
       return Colors.orange;
     }
     if (line.contains("SYSTEM")) {
-      return const Color(0xFFFFD700); // Gold
+      return const Color(0xFFFFD700);
     }
-    return const Color(0xFF00FF41); // Matrix Green
+    return const Color(0xFF00FF41);
   }
 
   @override
   Widget build(BuildContext context) {
-    // Filtere die Liste für die Anzeige
     final displayList = _devMode 
         ? _logLines 
         : _logLines.where((l) => _shouldShowInNormalMode(l)).toList();
@@ -160,7 +687,14 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
         backgroundColor: Colors.black,
         elevation: 0,
         actions: [
-          // MODE TOGGLE BUTTON
+          // Admin Button
+          IconButton(
+            icon: const Icon(Icons.admin_panel_settings, color: Color(0xFFFF0055)),
+            onPressed: _showAdminPanel,
+            tooltip: "Admin Panel",
+          ),
+          const SizedBox(width: 8),
+          // Mode Toggle
           TextButton.icon(
             onPressed: () => setState(() => _devMode = !_devMode),
             icon: Icon(
@@ -176,11 +710,11 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
               ),
             ),
             style: TextButton.styleFrom(
-              backgroundColor: _devMode ? const Color(0xFF00FF41).withOpacity(0.1) : Colors.grey.withOpacity(0.2),
+              backgroundColor: _devMode ? const Color(0xFF00FF41).withValues(alpha: 0.1) : Colors.grey.withValues(alpha: 0.2),
             ),
           ),
           const SizedBox(width: 8),
-          // AUTO SCROLL BUTTON
+          // Auto Scroll
           IconButton(
             icon: Icon(
               _autoScroll ? Icons.arrow_circle_down : Icons.pause_circle_outline,
@@ -195,7 +729,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
         decoration: BoxDecoration(
           border: Border(
               top: BorderSide(
-                  color: (_devMode ? const Color(0xFF00FF41) : Colors.white).withOpacity(0.3))),
+                  color: (_devMode ? const Color(0xFF00FF41) : Colors.white).withValues(alpha: 0.3))),
           color: const Color(0xFF050505),
         ),
         child: displayList.isEmpty 
@@ -208,7 +742,6 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
             final rawLine = displayList[index];
             
             if (_devMode) {
-              // --- DEV MODE VIEW (Raw Terminal Style) ---
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
                 child: Text(
@@ -220,7 +753,6 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
                 ),
               );
             } else {
-              // --- NORMAL MODE VIEW (User Friendly) ---
               final cleanText = _formatForNormalMode(rawLine);
               final color = _getLogColor(rawLine);
               final icon = _getIconForLine(rawLine);
@@ -239,13 +771,13 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(icon, size: 16, color: color.withOpacity(0.8)),
+                    Icon(icon, size: 16, color: color.withValues(alpha: 0.8)),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
                         cleanText,
                         style: GoogleFonts.rajdhani(
-                          color: Colors.white.withOpacity(0.9),
+                          color: Colors.white.withValues(alpha: 0.9),
                           fontSize: 14,
                           fontWeight: FontWeight.w500,
                         ),
