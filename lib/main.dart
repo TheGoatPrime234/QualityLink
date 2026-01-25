@@ -4,14 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart'; // ✅ NEU
 
-// --- HIER WAREN DIE FEHLER ---
-// Stelle sicher, dass diese Dateien existieren!
 import 'screens/datalink_screen.dart';
 import 'screens/system_monitor_screen.dart';
 import 'screens/shared_clipboard_screen.dart';
-import 'widgets/dynamic_island_widget.dart'; // <--- Das muss jetzt da sein
+import 'screens/network_storage_screen.dart';
+import 'widgets/dynamic_island_widget.dart';
 import 'services/notification_helper.dart';
+import 'services/file_server_service.dart';
 
 void main() async{
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,8 +20,6 @@ void main() async{
   runApp(const QualityLinkApp());
 }
 
-// --- WICHTIG: ENTRY POINT FÜR DIE ISLAND (MUSS HIER SEIN) ---
-// WICHTIG: Das muss EXAKT so aussehen und IMPORTIERBAR sein
 @pragma("vm:entry-point")
 void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,7 +34,6 @@ void overlayMain() {
     ),
   );
 }
-// -----------------------------------------------------------
 
 class QualityLinkApp extends StatelessWidget {
   const QualityLinkApp({super.key});
@@ -113,17 +111,48 @@ class _MainSystemShellState extends State<MainSystemShell> {
       id = "${name.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}_${Random().nextInt(9999)}";
       await prefs.setString('pid', id);
     }
+    
+    // ✅ ERST Permissions, DANN File Server!
+    if (Platform.isAndroid) {
+      await _requestStoragePermissions();
+    }
+    
+    // ✅ Starte File Server
+    final port = await FileServerService.start();
+    if (port != null) {
+      print("✅ File Server running on port $port");
+      await prefs.setInt('file_server_port', port);
+    } else {
+      print("❌ File Server failed to start");
+    }
+    
     setState(() {
       _myDeviceName = name;
       _myClientId = id!;
     });
   }
 
+  Future<void> _requestStoragePermissions() async {
+    if (Platform.isAndroid) {
+      final status = await Permission.storage.request();
+      
+      if (!status.isGranted) {
+        print("⚠️ Storage permission not granted");
+      }
+      
+      // Android 11+
+      if (await Permission.manageExternalStorage.isDenied) {
+        await Permission.manageExternalStorage.request();
+      }
+    }
+  }
+  
   @override
   Widget build(BuildContext context) {
     final List<Widget> screens = [
       DataLinkScreen(clientId: _myClientId, deviceName: _myDeviceName),
       SharedClipboardScreen(clientId: _myClientId, deviceName: _myDeviceName),
+      const NetworkStorageScreen(), // ✅ NEU
       const SystemMonitorScreen(),
     ];
 
@@ -135,6 +164,7 @@ class _MainSystemShellState extends State<MainSystemShell> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.import_export), label: "DATALINK"),
           BottomNavigationBarItem(icon: Icon(Icons.content_paste), label: "CLIPBOARD"),
+          BottomNavigationBarItem(icon: Icon(Icons.storage), label: "STORAGE"), // ✅ NEU
           BottomNavigationBarItem(icon: Icon(Icons.terminal), label: "SYSTEM LOG"),
         ],
       ),
