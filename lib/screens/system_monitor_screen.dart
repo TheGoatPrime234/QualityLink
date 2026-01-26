@@ -5,9 +5,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/server_config.dart';
+import '../services/heartbeat_service.dart'; // ✅ NEU
 
 // =============================================================================
-// SYSTEM MONITOR SCREEN - MODULE 2 (Enhanced with Dev/Normal Modes + Admin)
+// SYSTEM MONITOR SCREEN - MODULE 2 (Enhanced with HeartbeatService Debug Info)
 // =============================================================================
 class SystemMonitorScreen extends StatefulWidget {
   const SystemMonitorScreen({super.key});
@@ -17,6 +18,9 @@ class SystemMonitorScreen extends StatefulWidget {
 }
 
 class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
+  // ✅ Heartbeat Service Access
+  final HeartbeatService _heartbeatService = HeartbeatService();
+  
   List<String> _logLines = ["Initializing Uplink..."];
   Timer? _logTimer;
   final ScrollController _scrollController = ScrollController();
@@ -33,6 +37,9 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
   List<dynamic> _activeDevices = [];
   int _totalDevices = 0;
   int _onlineDevices = 0;
+  
+  // ✅ Heartbeat Debug Info
+  Map<String, dynamic> _heartbeatDebugInfo = {};
 
   @override
   void initState() {
@@ -42,8 +49,10 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
     _storageTimer = Timer.periodic(const Duration(seconds: 5), (t) {
       _fetchStorageInfo();
       _fetchActiveDevices();
+      _updateHeartbeatInfo(); // ✅ NEU
     });
     _fetchActiveDevices();
+    _updateHeartbeatInfo(); // ✅ NEU
   }
 
   @override
@@ -52,6 +61,13 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
     _storageTimer?.cancel();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  // ✅ NEU: Heartbeat Service Debug Info holen
+  void _updateHeartbeatInfo() {
+    setState(() {
+      _heartbeatDebugInfo = _heartbeatService.getDebugInfo();
+    });
   }
 
   void _startLogStream() {
@@ -214,6 +230,13 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
     }
   }
 
+  // ✅ NEU: Force Heartbeat (für Debugging)
+  Future<void> _forceHeartbeat() async {
+    await _heartbeatService.forceHeartbeat();
+    _updateHeartbeatInfo();
+    _showSnackBar("💓 Manual heartbeat sent", isError: false);
+  }
+
   void _showDeviceDetails(Map<String, dynamic> device) {
     showDialog(
       context: context,
@@ -265,6 +288,75 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFFF0055),
               foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ✅ NEU: Heartbeat Debug Dialog
+  void _showHeartbeatDebug() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: const Row(
+          children: [
+            Icon(Icons.favorite, color: Color(0xFFFF0055), size: 24),
+            SizedBox(width: 12),
+            Text("HEARTBEAT SERVICE", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildDetailRow(
+                "Status",
+                _heartbeatDebugInfo['isRunning'] == true ? "🟢 Running" : "🔴 Stopped",
+              ),
+              _buildDetailRow(
+                "Connection",
+                _heartbeatDebugInfo['isConnected'] == true ? "🟢 Connected" : "🔴 Disconnected",
+              ),
+              const Divider(color: Colors.grey),
+              _buildDetailRow("Client ID", _heartbeatDebugInfo['clientId'] ?? "N/A"),
+              _buildDetailRow("Device Name", _heartbeatDebugInfo['deviceName'] ?? "N/A"),
+              _buildDetailRow("Local IP", _heartbeatDebugInfo['localIp'] ?? "N/A"),
+              _buildDetailRow("File Server Port", "${_heartbeatDebugInfo['fileServerPort'] ?? 'N/A'}"),
+              const Divider(color: Colors.grey),
+              _buildDetailRow("Interval", "${_heartbeatDebugInfo['heartbeatInterval'] ?? 'N/A'}s"),
+              const Divider(color: Colors.grey),
+              const Text(
+                "Active Listeners:",
+                style: TextStyle(color: Color(0xFF00FF41), fontWeight: FontWeight.bold, fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+              if (_heartbeatDebugInfo['activeListeners'] != null) ...[
+                _buildDetailRow("Connection", "${_heartbeatDebugInfo['activeListeners']['connection']}"),
+                _buildDetailRow("Peer", "${_heartbeatDebugInfo['activeListeners']['peer']}"),
+                _buildDetailRow("Error", "${_heartbeatDebugInfo['activeListeners']['error']}"),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Close", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _forceHeartbeat();
+            },
+            icon: const Icon(Icons.sync, size: 16),
+            label: const Text("Force Beat"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00FF41),
+              foregroundColor: Colors.black,
             ),
           ),
         ],
@@ -355,6 +447,10 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
     );
   }
 
+  // FORTSETZUNG IN TEIL 2...
+
+// FORTSETZUNG VON TEIL 1...
+
   void _showAdminPanel() {
     showModalBottomSheet(
       context: context,
@@ -374,11 +470,11 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Header
-                Row(
+                const Row(
                   children: [
-                    const Icon(Icons.admin_panel_settings, color: Color(0xFFFF0055), size: 28),
-                    const SizedBox(width: 12),
-                    const Text(
+                    Icon(Icons.admin_panel_settings, color: Color(0xFFFF0055), size: 28),
+                    SizedBox(width: 12),
+                    Text(
                       "ADMIN PANEL",
                       style: TextStyle(
                         color: Color(0xFFFF0055),
@@ -389,6 +485,76 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
                   ],
                 ),
                 const SizedBox(height: 20),
+
+                // ✅ NEU: Heartbeat Service Status
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF151515),
+                    border: Border.all(color: const Color(0xFFFF0055).withValues(alpha: 0.3)),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            "HEARTBEAT SERVICE",
+                            style: TextStyle(
+                              color: Color(0xFFFF0055),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: (_heartbeatDebugInfo['isConnected'] == true 
+                                ? const Color(0xFF00FF41) 
+                                : Colors.red).withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              _heartbeatDebugInfo['isConnected'] == true ? "CONNECTED" : "OFFLINE",
+                              style: TextStyle(
+                                color: _heartbeatDebugInfo['isConnected'] == true 
+                                  ? const Color(0xFF00FF41) 
+                                  : Colors.red,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        "Interval: ${_heartbeatDebugInfo['heartbeatInterval'] ?? 'N/A'}s",
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      Text(
+                        "Local IP: ${_heartbeatDebugInfo['localIp'] ?? 'N/A'}",
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: _showHeartbeatDebug,
+                          icon: const Icon(Icons.favorite, size: 16),
+                          label: const Text("Show Details"),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFFFF0055),
+                            side: const BorderSide(color: Color(0xFFFF0055)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
 
                 // Active Devices Section
                 Container(
@@ -687,6 +853,13 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
         backgroundColor: Colors.black,
         elevation: 0,
         actions: [
+          // ✅ NEU: Heartbeat Debug Button
+          IconButton(
+            icon: const Icon(Icons.favorite, color: Color(0xFFFF0055)),
+            onPressed: _showHeartbeatDebug,
+            tooltip: "Heartbeat Debug",
+          ),
+          const SizedBox(width: 8),
           // Admin Button
           IconButton(
             icon: const Icon(Icons.admin_panel_settings, color: Color(0xFFFF0055)),

@@ -12,7 +12,7 @@ import '../config/server_config.dart';
 import '../services/clipboard_background_service.dart' hide serverBaseUrl;
 
 // =============================================================================
-// SHARED CLIPBOARD SCREEN (Fixed: Android Foreground Sync)
+// SHARED CLIPBOARD SCREEN (Enhanced with HeartbeatService Integration)
 // =============================================================================
 class SharedClipboardScreen extends StatefulWidget {
   final String clientId;
@@ -28,7 +28,6 @@ class SharedClipboardScreen extends StatefulWidget {
   State<SharedClipboardScreen> createState() => _SharedClipboardScreenState();
 }
 
-// Wir fügen WidgetsBindingObserver hinzu, um zu erkennen, wenn die App geöffnet wird
 class _SharedClipboardScreenState extends State<SharedClipboardScreen> with WidgetsBindingObserver {
   List<dynamic> _clipboardEntries = [];
   String? _lastClipboardContent;
@@ -46,7 +45,7 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this); // Lifecycle Observer registrieren
+    WidgetsBinding.instance.addObserver(this);
     timeago.setLocaleMessages('en', timeago.EnMessages());
     _loadSettings();
     _startSyncLoop();
@@ -56,24 +55,22 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this); // Observer entfernen
+    WidgetsBinding.instance.removeObserver(this);
     _syncTimer?.cancel();
     _clipboardMonitor?.cancel();
     super.dispose();
   }
 
-  // --- NEU: SOFORT-CHECK WENN APP GEÖFFNET WIRD ---
+  // ✅ Verbessert: Sofort-Check bei App-Resume
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // App ist wieder im Vordergrund -> Sofort prüfen!
       print("📱 App resumed: Checking clipboard immediately...");
       _checkLocalClipboard(); 
       _pullFromServer();
     }
   }
 
-  // ... (Background Service Init bleibt gleich) ...
   Future<void> _initBackgroundService() async {
     if (Platform.isAndroid) {
       if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
@@ -102,7 +99,6 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
     }
   }
 
-  // ... (Settings Load/Save bleibt gleich) ...
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
@@ -123,10 +119,9 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
   }
 
   // ===========================================================================
-  // CLIPBOARD MONITORING (FIXED FOR ANDROID)
+  // CLIPBOARD MONITORING
   // ===========================================================================
   void _startClipboardMonitor() {
-    // Timer läuft jetzt alle 1 Sekunde für schnelleres Feedback
     _clipboardMonitor = Timer.periodic(const Duration(seconds: 1), (t) async {
       if (!_autoSync) return;
       await _checkLocalClipboard();
@@ -134,15 +129,11 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
   }
 
   Future<void> _checkLocalClipboard() async {
-    // FIX: Wir erlauben Android hier explizit!
-    // Auf Android darf man nur lesen, wenn die App im Fokus ist.
-    // Da dieser Code im UI-Thread läuft, ist das gewährleistet.
     try {
       final clipData = await Clipboard.getData(Clipboard.kTextPlain);
       final content = clipData?.text?.trim();
       
       if (content != null && content.isNotEmpty) {
-        // Prüfen ob es wirklich neu ist (und nicht das, was wir gerade empfangen haben)
         if (content != _lastClipboardContent && content != _lastReceivedContent) {
           print("📋 New local content detected: ${content.substring(0, content.length > 20 ? 20 : content.length)}...");
           _lastClipboardContent = content;
@@ -150,12 +141,10 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
         }
       }
     } catch (e) {
-      // Silent fail (passiert manchmal wenn App minimiert wird)
+      // Silent fail
     }
   }
 
-  // ... (Rest der Logik: _startSyncLoop, _pushToServer, _pullFromServer etc.) ...
-  
   void _startSyncLoop() {
     _pullFromServer();
     _syncTimer = Timer.periodic(const Duration(seconds: 3), (t) {
@@ -179,11 +168,7 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
       );
       
       if (response.statusCode == 200) {
-        // Erfolgreich gesendet -> UI sofort updaten
         _pullFromServer();
-        
-        // Optional: Kleines Feedback (nicht zu nervig)
-        // if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("📤 Synced"), duration: Duration(milliseconds: 500), backgroundColor: Color(0xFF00FF41).withOpacity(0.2)));
       }
     } catch (e) {
       print("❌ Clipboard push failed: $e");
@@ -235,10 +220,10 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
 
   Future<void> _autoCopyToClipboard(String content) async {
     _lastReceivedContent = content;
-    _lastClipboardContent = content; // Damit wir es nicht sofort wieder hochladen
+    _lastClipboardContent = content;
     
     await Clipboard.setData(ClipboardData(text: content));
-    print("🔄 Auto-copied from cloud");
+    print("📄 Auto-copied from cloud");
     
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -257,12 +242,18 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
     _lastClipboardContent = content;
     await Clipboard.setData(ClipboardData(text: content));
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("📋 Copied!"), duration: Duration(seconds: 1), backgroundColor: Color(0xFF00FF41)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("📋 Copied!"),
+          duration: Duration(seconds: 1),
+          backgroundColor: Color(0xFF00FF41),
+        ),
+      );
     }
   }
 
   Future<void> _manualPush() async {
-    await _checkLocalClipboard(); // Manuell triggern
+    await _checkLocalClipboard();
     _showSnack("✅ Manual Check Done");
   }
 
@@ -271,16 +262,20 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
       await http.delete(Uri.parse('$serverBaseUrl/clipboard/clear/${widget.clientId}'));
       _pullFromServer();
       _showSnack("🗑️ History cleared");
-    } catch (e) { _showSnack("❌ Error: $e", isError: true); }
+    } catch (e) {
+      _showSnack("❌ Error: $e", isError: true);
+    }
   }
 
   void _showSnack(String msg, {bool isError = false}) {
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(msg),
-        backgroundColor: isError ? Colors.red : const Color(0xFF00FF41).withValues(alpha: 0.3),
-        duration: const Duration(seconds: 2),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: isError ? Colors.red : const Color(0xFF00FF41).withValues(alpha: 0.3),
+          duration: const Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -291,7 +286,10 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
   }
 
   String _getDeviceName(String clientId) {
-    final entry = _clipboardEntries.firstWhere((e) => e['client_id'] == clientId, orElse: () => {'client_name': clientId});
+    final entry = _clipboardEntries.firstWhere(
+      (e) => e['client_id'] == clientId,
+      orElse: () => {'client_name': clientId}
+    );
     return entry['client_name'];
   }
 
@@ -307,57 +305,140 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
         elevation: 0,
         actions: [
           IconButton(
-            icon: Icon(_autoSync ? Icons.sync : Icons.sync_disabled, color: _autoSync ? const Color(0xFF00FF41) : Colors.grey),
-            onPressed: () { setState(() => _autoSync = !_autoSync); _saveSettings(); },
+            icon: Icon(
+              _autoSync ? Icons.sync : Icons.sync_disabled,
+              color: _autoSync ? const Color(0xFF00FF41) : Colors.grey,
+            ),
+            onPressed: () {
+              setState(() => _autoSync = !_autoSync);
+              _saveSettings();
+            },
           ),
-          Center(child: Padding(padding: const EdgeInsets.only(right: 16), child: Text(_isConnected ? "SYNCED" : "OFFLINE", style: TextStyle(color: _isConnected ? const Color(0xFF00FF41) : Colors.red, fontWeight: FontWeight.bold, fontSize: 10)))),
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Text(
+                _isConnected ? "SYNCED" : "OFFLINE",
+                style: TextStyle(
+                  color: _isConnected ? const Color(0xFF00FF41) : Colors.red,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 10,
+                ),
+              ),
+            ),
+          ),
         ],
       ),
       body: Column(
         children: [
           Container(
-            width: double.infinity, padding: const EdgeInsets.all(12), color: const Color(0xFF0F0F0F),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            color: const Color(0xFF0F0F0F),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Text("Device: ${widget.deviceName}"),
-                Row(children: [
-                    Expanded(child: Text(_autoSync ? "Auto-sync: ON" : "Auto-sync: OFF", style: const TextStyle(color: Colors.grey, fontSize: 10))),
-                    Row(mainAxisSize: MainAxisSize.min, children: [
-                        const Text("Auto-copy: ", style: TextStyle(color: Colors.grey, fontSize: 10)),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _autoSync ? "Auto-sync: ON" : "Auto-sync: OFF",
+                        style: const TextStyle(color: Colors.grey, fontSize: 10),
+                      ),
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          "Auto-copy: ",
+                          style: TextStyle(color: Colors.grey, fontSize: 10),
+                        ),
                         Switch(
                           value: _autoCopyMode,
-                          onChanged: (val) { setState(() => _autoCopyMode = val); _saveSettings(); },
-                          activeColor: const Color(0xFF00FF41), inactiveThumbColor: Colors.grey, materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          onChanged: (val) {
+                            setState(() => _autoCopyMode = val);
+                            _saveSettings();
+                          },
+                          activeColor: const Color(0xFF00FF41),
+                          inactiveThumbColor: Colors.grey,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                    ]),
-                ]),
-            ]),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
           if (_availableDevices.length > 1)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: DropdownButtonFormField<String>(
                 value: _selectedDeviceFilter,
-                decoration: InputDecoration(contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), border: OutlineInputBorder(borderRadius: BorderRadius.circular(4), borderSide: const BorderSide(color: Color(0xFF00FF41))), filled: true, fillColor: const Color(0xFF0F0F0F)),
-                dropdownColor: const Color(0xFF1A1A1A), style: const TextStyle(color: Colors.white, fontSize: 12),
+                decoration: InputDecoration(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(4),
+                    borderSide: const BorderSide(color: Color(0xFF00FF41)),
+                  ),
+                  filled: true,
+                  fillColor: const Color(0xFF0F0F0F),
+                ),
+                dropdownColor: const Color(0xFF1A1A1A),
+                style: const TextStyle(color: Colors.white, fontSize: 12),
                 items: [
-                  DropdownMenuItem(value: "all", child: Text("All Devices (${_clipboardEntries.length})")),
-                  ..._availableDevices.map((id) => DropdownMenuItem(value: id, child: Text("${_getDeviceName(id)} (${_clipboardEntries.where((e)=>e['client_id']==id).length})"))),
+                  DropdownMenuItem(
+                    value: "all",
+                    child: Text("All Devices (${_clipboardEntries.length})"),
+                  ),
+                  ..._availableDevices.map((id) => DropdownMenuItem(
+                    value: id,
+                    child: Text(
+                      "${_getDeviceName(id)} (${_clipboardEntries.where((e) => e['client_id'] == id).length})",
+                    ),
+                  )),
                 ],
                 onChanged: (v) => setState(() => _selectedDeviceFilter = v ?? "all"),
               ),
             ),
           Padding(
             padding: const EdgeInsets.all(16),
-            child: Row(children: [
-                Expanded(child: ElevatedButton.icon(onPressed: _manualPush, icon: const Icon(Icons.upload), label: const Text("PUSH NOW"), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00FF41).withValues(alpha: 0.2)))),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _manualPush,
+                    icon: const Icon(Icons.upload),
+                    label: const Text("PUSH NOW"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00FF41).withValues(alpha: 0.2),
+                    ),
+                  ),
+                ),
                 const SizedBox(width: 10),
-                Expanded(child: ElevatedButton.icon(onPressed: _clearMyHistory, icon: const Icon(Icons.delete_sweep), label: const Text("CLEAR MINE"), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF0055).withValues(alpha: 0.2)))),
-            ]),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _clearMyHistory,
+                    icon: const Icon(Icons.delete_sweep),
+                    label: const Text("CLEAR MINE"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFF0055).withValues(alpha: 0.2),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
           const Divider(),
           Expanded(
             child: _filteredEntries.isEmpty
-                ? const Center(child: Text("No entries found", style: TextStyle(color: Colors.grey)))
+                ? const Center(
+                    child: Text(
+                      "No entries found",
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  )
                 : ListView.builder(
                     padding: const EdgeInsets.all(8),
                     itemCount: _filteredEntries.length,
@@ -375,21 +456,51 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
       color: isMyEntry ? const Color(0xFF1A1A1A) : const Color(0xFF0F0F0F),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: isMyEntry ? const Color(0xFF00FF41).withValues(alpha: 0.3) : Colors.transparent)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(
+          color: isMyEntry ? const Color(0xFF00FF41).withValues(alpha: 0.3) : Colors.transparent,
+        ),
+      ),
       child: InkWell(
         onTap: () => _copyToClipboard(content),
         child: Padding(
           padding: const EdgeInsets.all(12),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                  Icon(Icons.text_fields, color: const Color(0xFF00FF41), size: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.text_fields, color: Color(0xFF00FF41), size: 20),
                   const SizedBox(width: 8),
-                  Expanded(child: Text(entry['client_name'], style: TextStyle(color: isMyEntry ? const Color(0xFF00FF41) : Colors.white, fontWeight: FontWeight.bold, fontSize: 12))),
-                  Text(timeago.format(DateTime.now().subtract(Duration(seconds: entry['age_seconds'])), locale: 'en_short'), style: const TextStyle(color: Colors.grey, fontSize: 10)),
-              ]),
+                  Expanded(
+                    child: Text(
+                      entry['client_name'],
+                      style: TextStyle(
+                        color: isMyEntry ? const Color(0xFF00FF41) : Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    timeago.format(
+                      DateTime.now().subtract(Duration(seconds: entry['age_seconds'])),
+                      locale: 'en_short',
+                    ),
+                    style: const TextStyle(color: Colors.grey, fontSize: 10),
+                  ),
+                ],
+              ),
               const SizedBox(height: 8),
-              Text(content, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white70, fontSize: 14)),
-          ]),
+              Text(
+                content,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white70, fontSize: 14),
+              ),
+            ],
+          ),
         ),
       ),
     );

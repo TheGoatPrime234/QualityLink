@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:permission_handler/permission_handler.dart'; // ✅ NEU
+import 'package:permission_handler/permission_handler.dart';
 
 import 'screens/datalink_screen.dart';
 import 'screens/system_monitor_screen.dart';
@@ -13,6 +13,7 @@ import 'screens/network_storage_screen.dart';
 import 'widgets/dynamic_island_widget.dart';
 import 'services/notification_helper.dart';
 import 'services/file_server_service.dart';
+import 'services/heartbeat_service.dart'; // ✅ NEU
 
 void main() async{
   WidgetsFlutterBinding.ensureInitialized();
@@ -83,15 +84,39 @@ class MainSystemShell extends StatefulWidget {
   State<MainSystemShell> createState() => _MainSystemShellState();
 }
 
-class _MainSystemShellState extends State<MainSystemShell> {
+class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingObserver { // ✅ Observer hinzugefügt
   int _currentIndex = 0;
   late String _myClientId;
   String _myDeviceName = "Init...";
+  bool _isInitializing = true;
+  
+  // ✅ Heartbeat Service Instance
+  final HeartbeatService _heartbeatService = HeartbeatService();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this); // ✅ Observer registrieren
     _initId();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this); // ✅ Observer entfernen
+    _heartbeatService.stop(); // ✅ Service stoppen
+    super.dispose();
+  }
+
+  // ✅ App Lifecycle Management für Heartbeat
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _heartbeatService.pause();
+      print("⏸️ App paused - Heartbeat paused");
+    } else if (state == AppLifecycleState.resumed) {
+      _heartbeatService.resume();
+      print("▶️ App resumed - Heartbeat resumed");
+    }
   }
 
   Future<void> _initId() async {
@@ -112,12 +137,21 @@ class _MainSystemShellState extends State<MainSystemShell> {
       await prefs.setString('pid', id);
     }
     
-    // ✅ ERST Permissions, DANN File Server!
+    // State setzen
+    setState(() {
+      _myDeviceName = name;
+      _myClientId = id!;
+    });
+    
+    // Permissions anfordern
     if (Platform.isAndroid) {
+      print("🔐 Requesting storage permissions...");
       await _requestStoragePermissions();
+      print("🔐 Permission request completed");
     }
     
-    // ✅ Starte File Server
+    // File Server starten
+    print("🌐 Starting File Server...");
     final port = await FileServerService.start();
     if (port != null) {
       print("✅ File Server running on port $port");
@@ -126,33 +160,72 @@ class _MainSystemShellState extends State<MainSystemShell> {
       print("❌ File Server failed to start");
     }
     
+    // ✅ HEARTBEAT SERVICE STARTEN (nach File Server!)
+    print("💓 Starting Heartbeat Service...");
+    await _heartbeatService.start(
+      clientId: _myClientId,
+      deviceName: _myDeviceName,
+      fileServerPort: port,
+    );
+    print("✅ Heartbeat Service started");
+    
+    // Initialisierung fertig
     setState(() {
-      _myDeviceName = name;
-      _myClientId = id!;
+      _isInitializing = false;
     });
   }
 
   Future<void> _requestStoragePermissions() async {
     if (Platform.isAndroid) {
+      // Storage Permission
       final status = await Permission.storage.request();
       
       if (!status.isGranted) {
         print("⚠️ Storage permission not granted");
+      } else {
+        print("✅ Storage permission granted");
       }
       
-      // Android 11+
+      // Android 11+ MANAGE_EXTERNAL_STORAGE
       if (await Permission.manageExternalStorage.isDenied) {
-        await Permission.manageExternalStorage.request();
+        print("🔐 Requesting MANAGE_EXTERNAL_STORAGE...");
+        final manageStatus = await Permission.manageExternalStorage.request();
+        
+        if (!manageStatus.isGranted) {
+          print("⚠️ MANAGE_EXTERNAL_STORAGE not granted");
+        } else {
+          print("✅ MANAGE_EXTERNAL_STORAGE granted");
+        }
       }
     }
   }
   
   @override
   Widget build(BuildContext context) {
+    // Loading Screen während Initialisierung
+    if (_isInitializing) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF050505),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(color: Color(0xFF00FF41)),
+              SizedBox(height: 20),
+              Text(
+                "Initializing QualityLink...",
+                style: TextStyle(color: Color(0xFF00FF41), fontSize: 16),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    
     final List<Widget> screens = [
       DataLinkScreen(clientId: _myClientId, deviceName: _myDeviceName),
       SharedClipboardScreen(clientId: _myClientId, deviceName: _myDeviceName),
-      const NetworkStorageScreen(), // ✅ NEU
+      const NetworkStorageScreen(),
       const SystemMonitorScreen(),
     ];
 
@@ -164,7 +237,7 @@ class _MainSystemShellState extends State<MainSystemShell> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.import_export), label: "DATALINK"),
           BottomNavigationBarItem(icon: Icon(Icons.content_paste), label: "CLIPBOARD"),
-          BottomNavigationBarItem(icon: Icon(Icons.storage), label: "STORAGE"), // ✅ NEU
+          BottomNavigationBarItem(icon: Icon(Icons.storage), label: "STORAGE"),
           BottomNavigationBarItem(icon: Icon(Icons.terminal), label: "SYSTEM LOG"),
         ],
       ),
