@@ -1,0 +1,255 @@
+
+// =============================================================================
+// MODULE 1: DATALINK (File Sharing - Unverändert gut)
+// =============================================================================
+class DataLinkScreen extends StatefulWidget {
+  final String clientId;
+  final String deviceName;
+  const DataLinkScreen({super.key, required this.clientId, required this.deviceName});
+
+  @override
+  State<DataLinkScreen> createState() => _DataLinkScreenState();
+}
+
+class _DataLinkScreenState extends State<DataLinkScreen> {
+  List<dynamic> _activePeers = []; 
+  List<dynamic> _files = [];       
+  final Set<String> _selectedTargetIds = {}; 
+  Set<String> _downloadHistory = {}; 
+  String? _systemDownloadPath; 
+  List<String> _customPaths = []; 
+  String _selectedPath = "DEFAULT"; 
+  bool _isConnected = false;
+  Timer? _heartbeatTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _initSystem();
+  }
+
+  @override
+  void dispose() {
+    _heartbeatTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _initSystem() async {
+    await _locateSystemDownloadFolder();
+    await _loadPersistentSettings();
+    _startHeartbeatLoop();
+  }
+
+  Future<void> _loadPersistentSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _downloadHistory = (prefs.getStringList('dl_history') ?? []).toSet();
+      _customPaths = prefs.getStringList('custom_paths') ?? [];
+      String? lastPath = prefs.getString('selected_path_key');
+      if (lastPath != null && (lastPath == "DEFAULT" || _customPaths.contains(lastPath))) {
+        _selectedPath = lastPath;
+      }
+    });
+  }
+
+  Future<void> _savePersistentSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('dl_history', _downloadHistory.toList());
+    await prefs.setStringList('custom_paths', _customPaths);
+    await prefs.setString('selected_path_key', _selectedPath);
+  }
+
+  Future<void> _locateSystemDownloadFolder() async {
+    if (Platform.isAndroid) {
+      await Permission.storage.request();
+      _systemDownloadPath = "/storage/emulated/0/Download";
+    } else if (Platform.isWindows) {
+      final dir = await getDownloadsDirectory();
+      _systemDownloadPath = dir?.path;
+    }
+    if (_systemDownloadPath == null) {
+      final fallback = await getApplicationDocumentsDirectory();
+      _systemDownloadPath = fallback.path;
+    }
+  }
+
+  void _startHeartbeatLoop() {
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      _sendHeartbeat();
+      _refreshAndAutoDownload();
+    });
+    _sendHeartbeat();
+  }
+
+  Future<void> _sendHeartbeat() async {
+    try {
+      final response = await http.post(
+        Uri.parse('http://$serverIp:$serverPort/heartbeat'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "client_id": widget.clientId,
+          "client_name": widget.deviceName,
+          "device_type": Platform.operatingSystem
+        }),
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (mounted) setState(() {
+          _isConnected = true;
+          _activePeers = data['active_peers'];
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isConnected = false);
+    }
+  }
+
+  Future<void> _addNewCustomPath() async {
+    String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
+    if (selectedDirectory != null && !_customPaths.contains(selectedDirectory)) {
+      setState(() {
+        _customPaths.add(selectedDirectory);
+        _selectedPath = selectedDirectory;
+      });
+      _savePersistentSettings();
+    }
+  }
+
+  void _removeCustomPath(String path) {
+    setState(() {
+      _customPaths.remove(path);
+      if (_selectedPath == path) _selectedPath = "DEFAULT";
+    });
+    _savePersistentSettings();
+  }
+
+  String _getCurrentRealSavePath() {
+    return _selectedPath == "DEFAULT" ? (_systemDownloadPath ?? "") : _selectedPath;
+  }
+
+  Future<void> _refreshAndAutoDownload() async {
+    if (!_isConnected) return;
+    try {
+      final response = await http.get(Uri.parse('http://$serverIp:$serverPort/files/${widget.clientId}'));
+      if (response.statusCode == 200) {
+        final List<dynamic> serverFiles = json.decode(response.body)['files'];
+        if (mounted) setState(() => _files = serverFiles);
+
+        String saveDir = _getCurrentRealSavePath();
+        if (saveDir.isEmpty) return;
+
+        for (var file in serverFiles) {
+          final uniqueId = file['system_name'];
+          final display = file['display_name'];
+          if (!_downloadHistory.contains(uniqueId)) {
+            final saveFile = File('$saveDir/$display');
+            await _downloadFileSilently(uniqueId, saveFile);
+            _downloadHistory.add(uniqueId);
+            _savePersistentSettings();
+          }
+        }
+      }
+    } catch (e) { /* silent */ }
+  }
+
+  Future<void> _downloadFileSilently(String serverName, File targetFile) async {
+    try {
+      final response = await http.get(Uri.parse('http://$serverIp:$serverPort/download/$serverName'));
+      if (response.statusCode == 200) {
+        await targetFile.writeAsBytes(response.bodyBytes);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text("Auto-Saved: ${targetFile.path.split('/').last}"),
+            backgroundColor: const Color(0xFF00E5FF).withOpacity(0.3),
+            duration: const Duration(seconds: 2),
+          ));
+        }
+      }
+    } catch (e) { /* fail */ }
+  }
+
+  Future<void> _startBulkTransfer() async {
+    if (_selectedTargetIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Kein Ziel gewählt.")));
+      return;
+    }
+    FilePickerResult? result = await FilePicker.platform.pickFiles(allowMultiple: true);
+    if (result != null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Transfer gestartet...")));
+      for (var file in result.files) {
+        if (file.path != null) {
+          for (var targetId in _selectedTargetIds) {
+            await _uploadSingleFile(file.path!, targetId);
+          }
+        }
+      }
+    }
+  }
+
+  Future<void> _uploadSingleFile(String path, String targetId) async {
+    var request = http.MultipartRequest('POST', Uri.parse('http://$serverIp:$serverPort/upload'));
+    request.fields['target_id'] = targetId;
+    request.files.add(await http.MultipartFile.fromPath('file', path));
+    await request.send();
+  }
+
+  void _openFile(String serverName) async {
+    final url = Uri.parse('http://$serverIp:$serverPort/download/$serverName');
+    if (await canLaunchUrl(url)) await launchUrl(url, mode: LaunchMode.externalApplication);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("QUALITYLINK v5 // DATALINK"),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        actions: [
+           Center(child: Padding(padding: const EdgeInsets.only(right: 16), child: Text(_isConnected ? "ONLINE" : "OFFLINE", style: TextStyle(color: _isConnected ? const Color(0xFF00FF00) : Colors.red, fontWeight: FontWeight.bold, fontSize: 10))))
+        ],
+      ),
+      body: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(width: double.infinity, padding: const EdgeInsets.all(12), color: const Color(0xFF1A1A1A), child: Text("TERMINAL ID: ${widget.clientId}", style: TextStyle(color: Colors.grey[600], fontSize: 10, fontFamily: 'Courier'))),
+            const SizedBox(height: 20),
+            // STORAGE
+            Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text("SPEICHERORT", style: Theme.of(context).textTheme.titleSmall?.copyWith(color: const Color(0xFF00E5FF)))),
+            const SizedBox(height: 10),
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(border: Border.all(color: Colors.grey.withOpacity(0.2)), borderRadius: BorderRadius.circular(8)),
+              child: Column(children: [
+                _buildPathOption("STANDARD (Downloads)", _systemDownloadPath ?? "...", _selectedPath == "DEFAULT", Icons.get_app, () => setState(() {_selectedPath = "DEFAULT"; _savePersistentSettings();}), null),
+                ..._customPaths.map((path) => _buildPathOption("BENUTZERDEFINIERT", ".../${path.split(Platform.pathSeparator).last}", _selectedPath == path, Icons.folder_special, () => setState(() {_selectedPath = path; _savePersistentSettings();}), () => _removeCustomPath(path))),
+                InkWell(onTap: _addNewCustomPath, child: Container(width: double.infinity, padding: const EdgeInsets.all(12), child: const Center(child: Icon(Icons.add_circle_outline, color: Color(0xFFFF0055), size: 18))))
+              ]),
+            ),
+            const SizedBox(height: 30),
+            // TARGETS
+            Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text("NETZWERK ZIELE", style: Theme.of(context).textTheme.titleSmall?.copyWith(color: const Color(0xFF00E5FF))), InkWell(onTap: () => setState((){if(_selectedTargetIds.contains("GLOBAL"))_selectedTargetIds.remove("GLOBAL");else _selectedTargetIds.add("GLOBAL");}), child: Text(_selectedTargetIds.contains("GLOBAL") ? "[ CLOUD AKTIV ]" : "[ CLOUD INAKTIV ]", style: TextStyle(color: _selectedTargetIds.contains("GLOBAL") ? const Color(0xFF00E5FF) : Colors.grey, fontSize: 10)))])),
+            const SizedBox(height: 10),
+            SizedBox(height: 100, child: _activePeers.isEmpty ? const Center(child: Text("Scanning...", style: TextStyle(color: Colors.grey))) : ListView.builder(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 16), itemCount: _activePeers.length, itemBuilder: (context, index) { final peer = _activePeers[index]; final isSelected = _selectedTargetIds.contains(peer['id']); return _buildDeviceCard(peer, isSelected, () => setState((){if(isSelected)_selectedTargetIds.remove(peer['id']);else _selectedTargetIds.add(peer['id']);})); })),
+            const SizedBox(height: 20),
+            Center(child: ElevatedButton.icon(onPressed: _isConnected ? _startBulkTransfer : null, icon: const Icon(Icons.send_rounded), label: const Text("TRANSFER STARTEN"), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF0055).withOpacity(0.2), foregroundColor: const Color(0xFFFF0055), side: const BorderSide(color: Color(0xFFFF0055))))),
+            const Divider(color: Color(0xFF333333), height: 40),
+            // HISTORY
+             Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text("DATENSTROM", style: Theme.of(context).textTheme.titleSmall?.copyWith(color: const Color(0xFF00E5FF)))),
+             ListView.builder(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), padding: const EdgeInsets.all(16), itemCount: _files.length, itemBuilder: (context, index) { final file = _files[index]; final isKnown = _downloadHistory.contains(file['system_name']); return Card(color: isKnown ? const Color(0xFF102020) : null, child: ListTile(leading: Icon(Icons.file_present, color: Colors.grey[700]), title: Text(file['display_name'], style: const TextStyle(fontWeight: FontWeight.bold)), trailing: isKnown ? const Icon(Icons.check, color: Color(0xFF00E5FF), size: 16) : null, onTap: () => _openFile(file['system_name']))); })
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPathOption(String l, String s, bool sel, IconData i, VoidCallback tap, VoidCallback? del) {
+    return InkWell(onTap: tap, child: Container(color: sel ? const Color(0xFF00E5FF).withOpacity(0.1) : null, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), child: Row(children: [Icon(i, color: sel ? const Color(0xFF00E5FF) : Colors.grey, size: 20), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(l, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: sel ? Colors.white : Colors.grey)), Text(s, style: TextStyle(color: Colors.grey[600], fontSize: 10))])), if(del != null) IconButton(icon: const Icon(Icons.close, size: 16), onPressed: del)])));
+  }
+
+  Widget _buildDeviceCard(dynamic p, bool s, VoidCallback t) {
+    return GestureDetector(onTap: t, child: Container(width: 80, margin: const EdgeInsets.only(right: 8), decoration: BoxDecoration(color: s ? const Color(0xFFFF0055).withOpacity(0.1) : const Color(0xFF1E1E1E), border: Border.all(color: s ? const Color(0xFFFF0055) : Colors.grey.withOpacity(0.3))), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(p['type']=='windows'?Icons.laptop:Icons.phone_android, color: s?const Color(0xFFFF0055):Colors.grey), Text(p['name'], textAlign: TextAlign.center, style: TextStyle(fontSize: 9, color: s?Colors.white:Colors.grey), maxLines: 1)])));
+  }
+}
+

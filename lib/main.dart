@@ -1,0 +1,246 @@
+import 'dart:io';
+import 'dart:math';
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+import 'screens/datalink_screen.dart';
+import 'screens/system_monitor_screen.dart';
+import 'screens/shared_clipboard_screen.dart';
+import 'screens/network_storage_screen.dart';
+import 'widgets/dynamic_island_widget.dart';
+import 'services/notification_helper.dart';
+import 'services/file_server_service.dart';
+import 'services/heartbeat_service.dart'; // ✅ NEU
+
+void main() async{
+  WidgetsFlutterBinding.ensureInitialized();
+  await NotificationHelper.initialize();
+  runApp(const QualityLinkApp());
+}
+
+@pragma("vm:entry-point")
+void overlayMain() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(
+    MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData.dark(),
+      home: const Material(
+        color: Colors.transparent,
+        child: DynamicIslandWidget(),
+      ),
+    ),
+  );
+}
+
+class QualityLinkApp extends StatelessWidget {
+  const QualityLinkApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'QualityLink Hybrid',
+      debugShowCheckedModeBanner: false,
+      theme: _buildTheme(),
+      home: const MainSystemShell(),
+    );
+  }
+
+  ThemeData _buildTheme() {
+    final base = ThemeData.dark();
+    return base.copyWith(
+      scaffoldBackgroundColor: const Color(0xFF050505),
+      colorScheme: const ColorScheme.dark(
+        primary: Color(0xFFFF0055),
+        secondary: Color(0xFF00FF41),
+        surface: Color(0xFF101010),
+      ),
+      textTheme: GoogleFonts.rajdhaniTextTheme(base.textTheme).apply(
+        bodyColor: const Color(0xFFEEEEEE),
+        displayColor: const Color(0xFF00FF41),
+      ),
+      cardTheme: CardThemeData(
+        color: const Color(0xFF121212),
+        shape: RoundedRectangleBorder(
+            side: BorderSide(color: Colors.white.withOpacity(0.05), width: 1),
+            borderRadius: BorderRadius.circular(4)),
+      ),
+      bottomNavigationBarTheme: const BottomNavigationBarThemeData(
+        backgroundColor: Color(0xFF080808),
+        selectedItemColor: Color(0xFFFF0055),
+        unselectedItemColor: Colors.grey,
+        type: BottomNavigationBarType.fixed,
+      ),
+    );
+  }
+}
+
+class MainSystemShell extends StatefulWidget {
+  const MainSystemShell({super.key});
+  @override
+  State<MainSystemShell> createState() => _MainSystemShellState();
+}
+
+class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingObserver { // ✅ Observer hinzugefügt
+  int _currentIndex = 0;
+  late String _myClientId;
+  String _myDeviceName = "Init...";
+  bool _isInitializing = true;
+  
+  // ✅ Heartbeat Service Instance
+  final HeartbeatService _heartbeatService = HeartbeatService();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this); // ✅ Observer registrieren
+    _initId();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this); // ✅ Observer entfernen
+    _heartbeatService.stop(); // ✅ Service stoppen
+    super.dispose();
+  }
+
+  // ✅ App Lifecycle Management für Heartbeat
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _heartbeatService.pause();
+      print("⏸️ App paused - Heartbeat paused");
+    } else if (state == AppLifecycleState.resumed) {
+      _heartbeatService.resume();
+      print("▶️ App resumed - Heartbeat resumed");
+    }
+  }
+
+  Future<void> _initId() async {
+    final dev = DeviceInfoPlugin();
+    String name = "Client";
+    try {
+      if (Platform.isWindows) name = (await dev.windowsInfo).computerName;
+      if (Platform.isAndroid) {
+        final i = await dev.androidInfo;
+        name = "${i.brand} ${i.model}";
+      }
+    } catch (e) { /* ignore */ }
+    
+    final prefs = await SharedPreferences.getInstance();
+    String? id = prefs.getString('pid');
+    if (id == null) {
+      id = "${name.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_')}_${Random().nextInt(9999)}";
+      await prefs.setString('pid', id);
+    }
+    
+    // State setzen
+    setState(() {
+      _myDeviceName = name;
+      _myClientId = id!;
+    });
+    
+    // Permissions anfordern
+    if (Platform.isAndroid) {
+      print("🔐 Requesting storage permissions...");
+      await _requestStoragePermissions();
+      print("🔐 Permission request completed");
+    }
+    
+    // File Server starten
+    print("🌐 Starting File Server...");
+    final port = await FileServerService.start();
+    if (port != null) {
+      print("✅ File Server running on port $port");
+      await prefs.setInt('file_server_port', port);
+    } else {
+      print("❌ File Server failed to start");
+    }
+    
+    // ✅ HEARTBEAT SERVICE STARTEN (nach File Server!)
+    print("💓 Starting Heartbeat Service...");
+    await _heartbeatService.start(
+      clientId: _myClientId,
+      deviceName: _myDeviceName,
+      fileServerPort: port,
+    );
+    print("✅ Heartbeat Service started");
+    
+    // Initialisierung fertig
+    setState(() {
+      _isInitializing = false;
+    });
+  }
+
+  Future<void> _requestStoragePermissions() async {
+    if (Platform.isAndroid) {
+      // Storage Permission
+      final status = await Permission.storage.request();
+      
+      if (!status.isGranted) {
+        print("⚠️ Storage permission not granted");
+      } else {
+        print("✅ Storage permission granted");
+      }
+      
+      // Android 11+ MANAGE_EXTERNAL_STORAGE
+      if (await Permission.manageExternalStorage.isDenied) {
+        print("🔐 Requesting MANAGE_EXTERNAL_STORAGE...");
+        final manageStatus = await Permission.manageExternalStorage.request();
+        
+        if (!manageStatus.isGranted) {
+          print("⚠️ MANAGE_EXTERNAL_STORAGE not granted");
+        } else {
+          print("✅ MANAGE_EXTERNAL_STORAGE granted");
+        }
+      }
+    }
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    // Loading Screen während Initialisierung
+    if (_isInitializing) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF050505),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(color: Color(0xFF00FF41)),
+              SizedBox(height: 20),
+              Text(
+                "Initializing QualityLink...",
+                style: TextStyle(color: Color(0xFF00FF41), fontSize: 16),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    
+    final List<Widget> screens = [
+      DataLinkScreen(clientId: _myClientId, deviceName: _myDeviceName),
+      SharedClipboardScreen(clientId: _myClientId, deviceName: _myDeviceName),
+      const NetworkStorageScreen(),
+      const SystemMonitorScreen(),
+    ];
+
+    return Scaffold(
+      body: IndexedStack(index: _currentIndex, children: screens),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentIndex,
+        onTap: (index) => setState(() => _currentIndex = index),
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.import_export), label: "DATALINK"),
+          BottomNavigationBarItem(icon: Icon(Icons.content_paste), label: "CLIPBOARD"),
+          BottomNavigationBarItem(icon: Icon(Icons.storage), label: "STORAGE"),
+          BottomNavigationBarItem(icon: Icon(Icons.terminal), label: "SYSTEM LOG"),
+        ],
+      ),
+    );
+  }
+}
