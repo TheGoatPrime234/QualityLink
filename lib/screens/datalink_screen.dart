@@ -213,6 +213,16 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
   }
 
   Future<void> _initSystem() async {
+    // ✅ Permissions und Service ZUERST
+    if (Platform.isAndroid) {
+      await Permission.notification.request();
+      if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+      }
+      // Service jetzt starten
+      await _ensureServiceStarted();
+    }
+    
     await _locateSystemDownloadFolder();
     await _loadPersistent();
     await _startLocalServer();
@@ -222,13 +232,6 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     
     // ✅ Sync-Loop nur für Transfers/Tasks
     _startSyncLoop();
-    
-    if (Platform.isAndroid) {
-      await Permission.notification.request();
-      if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
-        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
-      }
-    }
   }
 
   // ✅ NEU: Heartbeat Service Setup
@@ -266,23 +269,31 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
   }
 
   Future<void> _ensureServiceStarted({bool showNotification = false}) async {
-    if (!_serviceStarted && Platform.isAndroid) {
+    if (Platform.isAndroid) {
       try {
-        await OverlayForegroundService.startWithOverlay(
-          status: _processingStatus,
-          progress: _progressValue,
-          mode: _progressMode.name,
-        );
-        _serviceStarted = true;
+        // ✅ Immer Service starten wenn noch nicht gestartet
+        if (!_serviceStarted) {
+          print("🚀 Starting OverlayForegroundService...");
+          await OverlayForegroundService.startWithOverlay(
+            status: _processingStatus.isNotEmpty ? _processingStatus : "QualityLink Ready",
+            progress: _progressValue,
+            mode: _progressMode.name,
+          );
+          _serviceStarted = true;
+          print("✅ OverlayForegroundService started");
+        }
+        
+        // ✅ Update wenn explizit gewünscht ODER wenn Processing läuft
+        if (showNotification || _isProcessing) {
+          await OverlayForegroundService.updateOverlay(
+            status: _processingStatus,
+            progress: _progressValue,
+            mode: _progressMode.name,
+          );
+        }
       } catch (e) {
-        print("❌ Service start failed: $e");
+        print("❌ Service start/update failed: $e");
       }
-    } else if (showNotification && _serviceStarted && Platform.isAndroid) {
-      await OverlayForegroundService.updateOverlay(
-        status: _processingStatus,
-        progress: _progressValue,
-        mode: _progressMode.name,
-      );
     }
   }
 
@@ -441,7 +452,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
       _progressValue = 0.0;
     });
 
-    await _ensureServiceStarted(showNotification: false);
+    await _ensureServiceStarted();
 
     final receivePort = ReceivePort();
 
@@ -501,7 +512,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
       _progressValue = 0.0;
     });
 
-    await _ensureServiceStarted(showNotification: false);
+    await _ensureServiceStarted();
 
     try {
       final request = ProgressMultipartRequest(
@@ -611,7 +622,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
         });
       }
 
-      await _ensureServiceStarted(showNotification: false);
+      await _ensureServiceStarted();
 
       final request = http.Request('GET', Uri.parse(url));
       final response = await http.Client().send(request).timeout(const Duration(seconds: 120));
@@ -665,7 +676,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
         });
       }
 
-      await _ensureServiceStarted(showNotification: false);
+      await _ensureServiceStarted();
 
       final client = http.Client();
       final response = await client.send(http.Request('GET', Uri.parse('$serverBaseUrl/download/relay/$tid')));

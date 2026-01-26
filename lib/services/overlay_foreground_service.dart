@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart' as ft;
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/notification_helper.dart';
 
 class OverlayForegroundService {
   static int _updateCounter = 0;
@@ -175,13 +176,24 @@ class OverlayForegroundService {
 
   static Future<void> showCompletionNotification(String message) async {
     if (!Platform.isAndroid) return;
-    await ft.FlutterForegroundTask.updateService(
-      notificationTitle: '✅ Complete!',
-      notificationText: message,
+    
+    print("🔔 Showing completion notification: $message");
+    
+    // ✅ Verwende separate Notification mit Sound & Vibration
+    await NotificationHelper.showCompletionNotification(
+      title: '✅ Transfer Complete!',
+      body: message,
     );
-    await Future.delayed(const Duration(seconds: 3));
+    
+    // Optional: Auch Service-Notification updaten
+    if (await ft.FlutterForegroundTask.isRunningService) {
+      await ft.FlutterForegroundTask.updateService(
+        notificationTitle: '✅ Complete!',
+        notificationText: message,
+      );
+    }
   }
-
+  
   static Future<void> stop() async {
     if (!Platform.isAndroid) return;
     final prefs = await SharedPreferences.getInstance();
