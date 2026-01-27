@@ -112,6 +112,9 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
       localIp: _heartbeat.localIp,
     );
 
+    // ✅ Download-Path setzen für automatische Downloads
+    _datalink.setDownloadPath(_currentDownloadPath);
+
     // DataLink Listeners
     _setupDataLinkListeners();
 
@@ -154,11 +157,13 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     });
 
     _datalink.addProgressListener((id, progress, message) {
+      print("🔍 PROGRESS UPDATE: $id - $progress - $message");  // ← NEU
       if (mounted) {
         setState(() {
           _progressValue = progress;
           _progressMessage = message ?? "";
         });
+        print("🔍 UI updated - progress: $_progressValue, msg: $_progressMessage");  // ← NEU
         _updateOverlayService();
       }
     });
@@ -168,8 +173,10 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     });
 
     _datalink.addProcessingListener((isProcessing) {
+      print("🔍 PROCESSING STATE CHANGED: $isProcessing");  // ← NEU
       if (mounted) {
         setState(() => _isProcessing = isProcessing);
+        print("🔍 UI updated - _isProcessing: $_isProcessing");  // ← NEU
         if (isProcessing) {
           _ensureOverlayServiceStarted();
         }
@@ -204,6 +211,9 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('custom_paths', _customPaths);
     await prefs.setString('selected_path', _selectedPath);
+    
+    // ✅ Update Download-Path im Service
+    _datalink.setDownloadPath(_currentDownloadPath);
   }
 
   Future<void> _addCustomPath() async {

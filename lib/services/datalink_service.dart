@@ -27,6 +27,7 @@ class DataLinkService {
   bool _isProcessing = false;
   String _clientId = "";
   String _myLocalIp = "0.0.0.0";
+  String _downloadPath = "";  // ✅ NEU: Für event-driven downloads
   
   HttpServer? _localServer;
   Timer? _syncTimer;
@@ -108,6 +109,12 @@ class DataLinkService {
     if (!_isRunning) return;
     _startSyncLoop();
     print("▶️ DataLinkService resumed");
+  }
+
+  /// Setzt den Download-Pfad für automatische Downloads
+  void setDownloadPath(String path) {
+    _downloadPath = path;
+    print("📂 Download path set: $path");
   }
 
   // =============================================================================
@@ -263,7 +270,8 @@ class DataLinkService {
 
   void _startSyncLoop() {
     _syncTimer?.cancel();
-    _syncTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+    // ✅ Intervall auf 5s erhöht da Downloads jetzt event-driven sind
+    _syncTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       _syncTransfers();
       _monitorSenderTasks();
     });
@@ -283,13 +291,38 @@ class DataLinkService {
         for (var transferData in transferList) {
           final transfer = Transfer.fromServerResponse(transferData);
           
-          // Update oder hinzufügen
+          // Check ob das ein NEUER Transfer ist
           final existingIndex = _transfers.indexWhere((t) => t.id == transfer.id);
+          final isNew = existingIndex == -1;
+          
           if (existingIndex != -1) {
-            _transfers[existingIndex] = transfer;
+            // Bestehender Transfer - prüfe auf Status-Änderung
+            final oldTransfer = _transfers[existingIndex];
+_transfers[existingIndex] = transfer;
+            
+            // ✅ Bei Status-Änderung zu RELAY_READY → Download starten
+            if (oldTransfer.status != TransferStatus.relayReady && 
+                transfer.status == TransferStatus.relayReady &&
+                !_processedTransferIds.contains(transfer.id) &&
+                _downloadPath.isNotEmpty) {
+              print("🚀 Status changed to relay ready - downloading immediately!");
+              _handleRelayReadyTransfer(transfer, _downloadPath);
+            }
           } else {
+            // Neuer Transfer
             _transfers.add(transfer);
             _notifyTransferUpdate(transfer);
+            
+            // ✅ SOFORT Download starten wenn Path gesetzt ist!
+            if (_downloadPath.isNotEmpty && !_processedTransferIds.contains(transfer.id)) {
+              if (transfer.status == TransferStatus.offered) {
+                print("🚀 New transfer detected - starting download immediately!");
+                _handleOfferedTransfer(transfer, _downloadPath);
+              } else if (transfer.status == TransferStatus.relayReady) {
+                print("🚀 Relay ready transfer detected - downloading immediately!");
+                _handleRelayReadyTransfer(transfer, _downloadPath);
+              }
+            }
           }
         }
       }
@@ -565,8 +598,7 @@ class DataLinkService {
 
   Future<void> _handleRelayReadyTransfer(Transfer transfer, String downloadPath) async {
     _processedTransferIds.add(transfer.id);
-    
-    final targetFile = File(p.join(downloadPath, transfer.fileName));
+final targetFile = File(p.join(downloadPath, transfer.fileName));
     
     _notifyMessage("☁️ Downloading from relay: ${transfer.fileName}");
     
