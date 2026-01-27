@@ -2,10 +2,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
-
-// =============================================================================
-// FILE SERVER SERVICE - Läuft im Hintergrund und exponiert Dateien
-// =============================================================================
+import 'package:path_provider/path_provider.dart'; // ✅ WICHTIG für Android 11+
 
 class FileServerService {
   static HttpServer? _server;
@@ -14,7 +11,6 @@ class FileServerService {
   
   static List<String> _availablePaths = [];
 
-  /// Startet den File Server auf einem dynamischen Port
   static Future<int?> start() async {
     if (_isRunning) {
       print("⚠️ File Server already running on port $_port");
@@ -24,25 +20,49 @@ class FileServerService {
     try {
       // Permissions prüfen
       if (Platform.isAndroid) {
-        final status = await Permission.storage.request();
-        if (!status.isGranted) {
+        print("📱 Android detected - checking permissions...");
+        
+        // Android 13+
+        if (await Permission.photos.isDenied) {
+          await Permission.photos.request();
+        }
+        if (await Permission.videos.isDenied) {
+          await Permission.videos.request();
+        }
+        
+        // Android 11+
+        if (await Permission.manageExternalStorage.isDenied) {
+          print("🔐 Requesting MANAGE_EXTERNAL_STORAGE...");
+          final status = await Permission.manageExternalStorage.request();
+          if (!status.isGranted) {
+            print("❌ MANAGE_EXTERNAL_STORAGE not granted");
+          }
+        }
+        
+        // Legacy Storage
+        final storageStatus = await Permission.storage.request();
+        if (!storageStatus.isGranted) {
           print("❌ Storage permission not granted");
-          return null;
         }
       }
 
       // Verfügbare Pfade ermitteln
       _availablePaths = await _getAvailablePaths();
       
-      // Server auf Port 0 starten (automatische Port-Zuweisung)
+      if (_availablePaths.isEmpty) {
+        print("⚠️ No available storage paths found!");
+        // Trotzdem Server starten, aber ohne Pfade
+      } else {
+        print("📁 Available paths: $_availablePaths");
+      }
+      
+      // Server starten
       _server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
       _port = _server!.port;
       _isRunning = true;
 
       print("✅ File Server started on port $_port");
-      print("📁 Available paths: $_availablePaths");
 
-      // Request Handler
       _server!.listen((HttpRequest request) async {
         try {
           await _handleRequest(request);
@@ -61,7 +81,6 @@ class FileServerService {
     }
   }
 
-  /// Stoppt den File Server
   static Future<void> stop() async {
     if (_server != null) {
       await _server!.close(force: true);
@@ -72,33 +91,65 @@ class FileServerService {
     }
   }
 
-  /// Gibt den aktuellen Port zurück
   static int? get port => _port;
-  
-  /// Gibt verfügbare Pfade zurück
   static List<String> get availablePaths => _availablePaths;
 
-  /// Ermittelt verfügbare Pfade basierend auf dem OS
+  /// ✅ VERBESSERT: Android 11+ kompatibel
   static Future<List<String>> _getAvailablePaths() async {
     List<String> paths = [];
 
     if (Platform.isAndroid) {
-      // Android Standard-Ordner
-      const basePath = "/storage/emulated/0";
-      paths = [
-        "$basePath/Download",
-        "$basePath/Documents",
-        "$basePath/Pictures",
-        "$basePath/DCIM",
-        "$basePath/Music",
-        "$basePath/Movies",
-      ];
+      print("🔍 Detecting Android storage paths...");
       
-      // Prüfe welche existieren
-      paths = paths.where((path) => Directory(path).existsSync()).toList();
+      try {
+        // Methode 1: Versuche Standard-Pfade (Android 10 und älter)
+        const basePath = "/storage/emulated/0";
+        final standardPaths = [
+          "$basePath/Download",
+          "$basePath/Documents",
+          "$basePath/Pictures",
+          "$basePath/DCIM",
+          "$basePath/Music",
+          "$basePath/Movies",
+        ];
+        
+        for (var path in standardPaths) {
+          try {
+            final dir = Directory(path);
+            if (await dir.exists()) {
+              // Teste ob wir Zugriff haben
+              await dir.list(recursive: false).first;
+              paths.add(path);
+              print("  ✅ $path accessible");
+            }
+          } catch (e) {
+            print("  ❌ $path not accessible: $e");
+          }
+        }
+        
+        // Methode 2: Falls keine Standard-Pfade funktionieren (Android 11+)
+        if (paths.isEmpty) {
+          print("⚠️ Standard paths not accessible, using app directories...");
+          
+          // App-eigene Verzeichnisse (immer verfügbar)
+          final externalDir = await getExternalStorageDirectory();
+          if (externalDir != null) {
+            paths.add(externalDir.path);
+            print("  ✅ App external dir: ${externalDir.path}");
+          }
+          
+          final downloadDir = await getDownloadsDirectory();
+          if (downloadDir != null) {
+            paths.add(downloadDir.path);
+            print("  ✅ App downloads dir: ${downloadDir.path}");
+          }
+        }
+        
+      } catch (e) {
+        print("❌ Error detecting Android paths: $e");
+      }
       
     } else if (Platform.isWindows) {
-      // Windows User-Ordner
       final username = Platform.environment['USERNAME'] ?? 'User';
       final userPath = 'C:\\Users\\$username';
       
@@ -114,10 +165,10 @@ class FileServerService {
       paths = paths.where((path) => Directory(path).existsSync()).toList();
     }
 
+    print("📊 Final available paths: ${paths.length}");
     return paths;
   }
 
-  /// Request Handler
   static Future<void> _handleRequest(HttpRequest request) async {
     final path = request.uri.path;
     
@@ -140,7 +191,6 @@ class FileServerService {
     }
   }
 
-  /// Ping - Server Health Check
   static Future<void> _handlePing(HttpRequest request) async {
     request.response.statusCode = 200;
     request.response.write(json.encode({
@@ -151,7 +201,6 @@ class FileServerService {
     await request.response.close();
   }
 
-  /// Liste verfügbare Pfade
   static Future<void> _handleGetPaths(HttpRequest request) async {
     request.response.statusCode = 200;
     request.response.write(json.encode({
@@ -160,7 +209,6 @@ class FileServerService {
     await request.response.close();
   }
 
-  /// Liste Dateien in einem Pfad
   static Future<void> _handleListFiles(HttpRequest request) async {
     final pathParam = request.uri.queryParameters['path'];
     
@@ -171,7 +219,6 @@ class FileServerService {
       return;
     }
 
-    // Security Check: Pfad muss in available_paths sein oder Unterpfad davon
     if (!_isPathAllowed(pathParam)) {
       request.response.statusCode = 403;
       request.response.write(json.encode({"error": "Access denied"}));
@@ -206,7 +253,6 @@ class FileServerService {
             "type": isDirectory ? "folder" : _getFileType(entity.path),
           });
         } catch (e) {
-          // Skip Dateien mit Access-Problemen
           print("⚠️ Skipping ${entity.path}: $e");
         }
       }
@@ -225,7 +271,6 @@ class FileServerService {
     }
   }
 
-  /// Download Datei
   static Future<void> _handleDownload(HttpRequest request) async {
     final pathParam = request.uri.queryParameters['path'];
     
@@ -268,7 +313,6 @@ class FileServerService {
     }
   }
 
-  /// File Info
   static Future<void> _handleFileInfo(HttpRequest request) async {
     final pathParam = request.uri.queryParameters['path'];
     
@@ -317,15 +361,12 @@ class FileServerService {
     }
   }
 
-  /// Security: Prüft ob Pfad erlaubt ist
   static bool _isPathAllowed(String path) {
-    // Normalisiere Pfade für Vergleich
     final normalizedPath = p.normalize(path);
     
     for (var allowedPath in _availablePaths) {
       final normalizedAllowed = p.normalize(allowedPath);
       
-      // Pfad muss exakt sein oder Unterpfad
       if (normalizedPath == normalizedAllowed || 
           normalizedPath.startsWith(normalizedAllowed + Platform.pathSeparator)) {
         return true;
@@ -335,7 +376,6 @@ class FileServerService {
     return false;
   }
 
-  /// Ermittelt File-Type anhand Extension
   static String _getFileType(String path) {
     final ext = p.extension(path).toLowerCase();
     

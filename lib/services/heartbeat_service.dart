@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/server_config.dart';
+import 'file_server_service.dart'; // ✅ Import für Storage-Registrierung
 
 /// Zentraler Heartbeat-Service für die Ecosystem-Kommunikation
 /// Verwaltet die Verbindung zum Server und hält die Gerätepräsenz aufrecht
@@ -296,28 +297,36 @@ class HeartbeatService {
 
   /// Registriert verfügbare Storage-Pfade beim Server
   Future<void> _registerStorage() async {
-    // Hier wird die Storage-Registrierung durchgeführt
-    // Dies kann später erweitert werden wenn FileServerService verfügbar ist
-    
-    // Placeholder für Storage-Registrierung
-    // TODO: Integration mit FileServerService
+    // Hole die verfügbaren Pfade vom FileServerService
     try {
-      // Dummy-Implementation - später durch echte Paths ersetzen
-      final availablePaths = <String>[];
+      // Prüfe ob FileServerService läuft
+      if (_fileServerPort == null || _fileServerPort == 0) {
+        // Kein FileServer aktiv, keine Storage-Registrierung nötig
+        return;
+      }
       
-      if (availablePaths.isNotEmpty) {
-        final response = await http.post(
-          Uri.parse('$serverBaseUrl/storage/register'),
-          headers: {"Content-Type": "application/json"},
-          body: json.encode({
-            "client_id": _clientId,
-            "available_paths": availablePaths,
-          }),
-        ).timeout(const Duration(seconds: 5));
+      // Hole verfügbare Pfade vom FileServerService
+      final availablePaths = FileServerService.availablePaths;
+      
+      if (availablePaths.isEmpty) {
+        print("⚠️ No storage paths available for registration");
+        return;
+      }
+      
+      // Registriere beim Server
+      final response = await http.post(
+        Uri.parse('$serverBaseUrl/storage/register'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "client_id": _clientId,
+          "available_paths": availablePaths,
+        }),
+      ).timeout(const Duration(seconds: 5));
 
-        if (response.statusCode == 200) {
-          print("📂 Storage registered successfully");
-        }
+      if (response.statusCode == 200) {
+        print("📂 Storage registered successfully: ${availablePaths.length} paths");
+      } else {
+        print("⚠️ Storage registration returned ${response.statusCode}");
       }
     } catch (e) {
       print("⚠️ Storage registration failed: $e");

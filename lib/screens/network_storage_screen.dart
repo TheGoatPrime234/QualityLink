@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:path/path.dart' as p;
 
 import '../config/server_config.dart';
+import '../services/heartbeat_service.dart';
 
 // =============================================================================
 // NETWORK STORAGE SCREEN - Browse files on other devices
@@ -21,36 +22,83 @@ class NetworkStorageScreen extends StatefulWidget {
 class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
   List<dynamic> _devices = [];
   bool _loading = true;
+  bool _isConnected = false;
   Timer? _refreshTimer;
+  
+  final HeartbeatService _heartbeatService = HeartbeatService();
 
   @override
   void initState() {
     super.initState();
+    
+    // Registriere Listener für Connection-Status
+    _heartbeatService.addConnectionListener(_onConnectionChanged);
+    
+    // Registriere Listener für Peer-Updates
+    _heartbeatService.addPeerListener(_onPeersUpdated);
+    
+    // Initiales Laden
     _loadDevices();
-    // ✅ Optimiert: Nur alle 5 Sekunden refreshen (HeartbeatService macht den Rest)
+    
+    // Optimiert: Nur alle 5 Sekunden refreshen (HeartbeatService macht den Rest)
     _refreshTimer = Timer.periodic(const Duration(seconds: 5), (t) => _loadDevices());
   }
 
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    // Listener werden beim Dispose des Services aufgeräumt
     super.dispose();
+  }
+
+  /// Callback wenn sich der Connection-Status ändert
+  void _onConnectionChanged(bool isConnected) {
+    if (mounted) {
+      setState(() {
+        _isConnected = isConnected;
+      });
+      
+      if (isConnected) {
+        _showSnack("✅ Connected to server", isError: false);
+        _loadDevices(); // Devices neu laden wenn wieder verbunden
+      } else {
+        _showSnack("❌ Disconnected from server", isError: true);
+      }
+    }
+  }
+
+  /// Callback wenn sich die Peer-Liste aktualisiert
+  void _onPeersUpdated(List<dynamic> peers) {
+    // Peers werden automatisch geladen durch _loadDevices()
+    // Dieser Callback kann für zusätzliche Logik genutzt werden
+    print("📱 Peers updated: ${peers.length} devices");
   }
 
   Future<void> _loadDevices() async {
     try {
-      final response = await http.get(Uri.parse('$serverBaseUrl/storage/devices'));
+      final response = await http.get(Uri.parse('$serverBaseUrl/storage/devices'))
+          .timeout(const Duration(seconds: 10));
       
       if (response.statusCode == 200 && mounted) {
         final data = json.decode(response.body);
         setState(() {
-          _devices = data['devices'];
+          _devices = data['devices'] ?? [];
           _loading = false;
         });
+      } else {
+        throw Exception("Server returned ${response.statusCode}");
       }
     } catch (e) {
       print("❌ Error loading devices: $e");
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          if (_devices.isEmpty) {
+            // Nur als Fehler anzeigen wenn wir keine Devices haben
+            _isConnected = false;
+          }
+        });
+      }
     }
   }
 
@@ -80,17 +128,64 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
     }
   }
 
+  void _showSnack(String message, {bool isError = false}) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: isError 
+              ? Colors.red 
+              : const Color(0xFF00FF41).withOpacity(0.3),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text("NETWORK STORAGE"),
+        title: Row(
+          children: [
+            const Text("NETWORK STORAGE"),
+            const SizedBox(width: 12),
+            // Connection Status Indicator
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: _isConnected ? const Color(0xFF00FF41) : Colors.red,
+                shape: BoxShape.circle,
+                boxShadow: _isConnected 
+                    ? [
+                        BoxShadow(
+                          color: const Color(0xFF00FF41).withOpacity(0.5),
+                          blurRadius: 8,
+                          spreadRadius: 2,
+                        )
+                      ]
+                    : null,
+              ),
+            ),
+          ],
+        ),
         backgroundColor: Colors.transparent,
         actions: [
+          // Debug Info Button
+          IconButton(
+            icon: const Icon(Icons.info_outline, size: 20),
+            onPressed: _showDebugInfo,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadDevices,
+            onPressed: () async {
+              setState(() => _loading = true);
+              // Force Heartbeat um sofortige Synchronisation zu triggern
+              await _heartbeatService.forceHeartbeat();
+              await _loadDevices();
+            },
           ),
         ],
       ),
@@ -109,15 +204,36 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
         children: [
           Icon(Icons.devices_other, size: 64, color: Colors.grey.withOpacity(0.3)),
           const SizedBox(height: 16),
-          const Text(
-            "No devices with storage found",
-            style: TextStyle(color: Colors.grey, fontSize: 16),
+          Text(
+            _isConnected 
+                ? "No devices with storage found"
+                : "Not connected to server",
+            style: const TextStyle(color: Colors.grey, fontSize: 16),
           ),
           const SizedBox(height: 8),
-          const Text(
-            "Make sure other devices are online",
-            style: TextStyle(color: Colors.grey, fontSize: 12),
+          Text(
+            _isConnected 
+                ? "Make sure other devices are online and have file sharing enabled"
+                : "Waiting for connection...",
+            style: const TextStyle(color: Colors.grey, fontSize: 12),
+            textAlign: TextAlign.center,
           ),
+          if (!_isConnected) ...[
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: () async {
+                setState(() => _loading = true);
+                await _heartbeatService.forceHeartbeat();
+                await _loadDevices();
+              },
+              icon: const Icon(Icons.refresh),
+              label: const Text("Retry Connection"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00FF41),
+                foregroundColor: Colors.black,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -130,9 +246,10 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
       itemBuilder: (context, index) {
         final device = _devices[index];
         final isOnline = device['online'] == true;
+        final hasFileServer = device['file_server_port'] != null && device['file_server_port'] > 0;
         
         return GestureDetector(
-          onTap: isOnline ? () => _openDevice(device) : null,
+          onTap: (isOnline && hasFileServer) ? () => _openDevice(device) : null,
           child: Container(
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.all(16),
@@ -140,7 +257,9 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
               color: const Color(0xFF111111),
               border: Border(
                 left: BorderSide(
-                  color: isOnline ? const Color(0xFF00FF41) : Colors.grey,
+                  color: (isOnline && hasFileServer) 
+                      ? const Color(0xFF00FF41) 
+                      : Colors.grey,
                   width: 4,
                 ),
               ),
@@ -152,8 +271,10 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
             child: Row(
               children: [
                 Icon(
-                  _getDeviceIcon(device['type']),
-                  color: isOnline ? const Color(0xFF00FF41) : Colors.grey,
+                  _getDeviceIcon(device['type'] ?? 'unknown'),
+                  color: (isOnline && hasFileServer) 
+                      ? const Color(0xFF00FF41) 
+                      : Colors.grey,
                   size: 32,
                 ),
                 const SizedBox(width: 16),
@@ -162,7 +283,7 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        device['name'],
+                        device['name'] ?? 'Unknown Device',
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
@@ -171,22 +292,50 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        "${device['ip']} • ${device['type']}",
+                        "${device['ip'] ?? 'N/A'} • ${device['type'] ?? 'unknown'}",
                         style: const TextStyle(color: Colors.grey, fontSize: 12),
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        "${device['available_paths'].length} storage location(s)",
-                        style: TextStyle(
-                          color: const Color(0xFF00FF41).withOpacity(0.7),
-                          fontSize: 11,
-                        ),
+                      Row(
+                        children: [
+                          if (hasFileServer) ...[
+                            Icon(
+                              Icons.folder_shared,
+                              size: 12,
+                              color: const Color(0xFF00FF41).withOpacity(0.7),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              "${(device['available_paths'] as List?)?.length ?? 0} storage location(s)",
+                              style: TextStyle(
+                                color: const Color(0xFF00FF41).withOpacity(0.7),
+                                fontSize: 11,
+                              ),
+                            ),
+                          ] else ...[
+                            Icon(
+                              Icons.folder_off,
+                              size: 12,
+                              color: Colors.grey.withOpacity(0.5),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              "File sharing not available",
+                              style: TextStyle(
+                                color: Colors.grey.withOpacity(0.5),
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ],
                   ),
                 ),
                 Icon(
-                  isOnline ? Icons.chevron_right : Icons.cloud_off,
+                  (isOnline && hasFileServer) 
+                      ? Icons.chevron_right 
+                      : Icons.cloud_off,
                   color: Colors.grey,
                   size: 24,
                 ),
@@ -195,6 +344,62 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
           ),
         );
       },
+    );
+  }
+
+  void _showDebugInfo() {
+    final debugInfo = _heartbeatService.getDebugInfo();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: const Text("Debug Info", style: TextStyle(color: Colors.white)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildDebugRow("Service Running", debugInfo['isRunning'].toString()),
+              _buildDebugRow("Connected", debugInfo['isConnected'].toString()),
+              _buildDebugRow("Client ID", debugInfo['clientId'] ?? 'N/A'),
+              _buildDebugRow("Device Name", debugInfo['deviceName'] ?? 'N/A'),
+              _buildDebugRow("Local IP", debugInfo['localIp'] ?? 'N/A'),
+              _buildDebugRow("File Server Port", debugInfo['fileServerPort']?.toString() ?? 'N/A'),
+              _buildDebugRow("Heartbeat Interval", "${debugInfo['heartbeatInterval']}s"),
+              const Divider(color: Colors.grey),
+              _buildDebugRow("Devices Found", _devices.length.toString()),
+              _buildDebugRow("Server URL", serverBaseUrl),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Close", style: TextStyle(color: Color(0xFF00FF41))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDebugRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              value,
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+              textAlign: TextAlign.right,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -225,10 +430,13 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   }
 
   Future<void> _loadRootPaths() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _currentPath = "Root";
+    });
     
     // Zeige verfügbare Root-Pfade als Ordner
-    final paths = List<String>.from(widget.device['available_paths']);
+    final paths = List<String>.from(widget.device['available_paths'] ?? []);
     
     setState(() {
       _files = paths.map((path) => {
@@ -237,45 +445,69 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
         "is_directory": true,
         "size": 0,
         "type": "folder",
+        "modified": DateTime.now().millisecondsSinceEpoch,
       }).toList();
-      _currentPath = "Root";
       _loading = false;
     });
   }
 
   Future<void> _loadPath(String path) async {
     setState(() => _loading = true);
-
+    
     try {
-      final targetIp = widget.device['ip'];
-      final targetPort = widget.device['file_server_port'];
+      final ip = widget.device['ip'];
+      final port = widget.device['file_server_port'];
       
-      final url = 'http://$targetIp:$targetPort/files/list?path=${Uri.encodeComponent(path)}';
-      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+      if (ip == null || port == null) {
+        throw Exception("Device IP or port not available");
+      }
+
+      final url = Uri.parse('http://$ip:$port/files/list?path=${Uri.encodeComponent(path)}');
+      print("🔄 Loading path from: $url");
       
-      if (response.statusCode == 200 && mounted) {
+      final response = await http.get(url).timeout(const Duration(seconds: 10));
+      
+      if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        setState(() {
-          _files = data['files'];
-          _currentPath = path;
-          _loading = false;
+        final files = List<dynamic>.from(data['files'] ?? []);
+        
+        // Sortiere: Ordner zuerst, dann alphabetisch
+        files.sort((a, b) {
+          if (a['is_directory'] != b['is_directory']) {
+            return a['is_directory'] ? -1 : 1;
+          }
+          return (a['name'] as String).compareTo(b['name'] as String);
         });
+        
+        if (mounted) {
+          setState(() {
+            _files = files;
+            _currentPath = path;
+            _loading = false;
+          });
+        }
+      } else if (response.statusCode == 403) {
+        throw Exception("Access denied");
+      } else if (response.statusCode == 404) {
+        throw Exception("Directory not found");
       } else {
-        _showError("Failed to load files");
-        setState(() => _loading = false);
+        throw Exception("Server error: ${response.statusCode}");
       }
     } catch (e) {
-      _showError("Connection error: $e");
-      setState(() => _loading = false);
+      print("❌ Error loading path: $e");
+      if (mounted) {
+        _showError("Failed to load directory: $e");
+        setState(() => _loading = false);
+      }
     }
   }
 
-  void _openItem(Map<String, dynamic> item) {
-    if (item['is_directory']) {
+  void _openItem(Map<String, dynamic> file) {
+    if (file['is_directory'] == true) {
       _pathHistory.add(_currentPath);
-      _loadPath(item['path']);
+      _loadPath(file['path']);
     } else {
-      _showFileOptions(item);
+      _showFileDetails(file);
     }
   }
 
@@ -292,45 +524,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     }
   }
 
-  void _showFileOptions(Map<String, dynamic> file) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1A1A1A),
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: Icon(_getFileIcon(file['type']), color: const Color(0xFF00FF41)),
-              title: Text(file['name'], style: const TextStyle(color: Colors.white)),
-              subtitle: Text(_formatSize(file['size']), style: const TextStyle(color: Colors.grey)),
-            ),
-            const Divider(color: Colors.grey),
-            ListTile(
-              leading: const Icon(Icons.download, color: Color(0xFF00FF41)),
-              title: const Text("Download", style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                _downloadFile(file);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.info_outline, color: Colors.grey),
-              title: const Text("Details", style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                _showFileDetails(file);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   void _downloadFile(Map<String, dynamic> file) {
-    // TODO: Implement download (ähnlich wie DataLink Transfer)
+    // TODO: Implement download functionality
     _showSnack("Download feature coming soon...");
   }
 
@@ -344,13 +539,13 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildDetailRow("Name", file['name']),
-            _buildDetailRow("Size", _formatSize(file['size'])),
-            _buildDetailRow("Type", file['type']),
-            _buildDetailRow("Modified", _formatDate(file['modified'])),
+            _buildDetailRow("Name", file['name'] ?? 'Unknown'),
+            _buildDetailRow("Size", _formatSize(file['size'] ?? 0)),
+            _buildDetailRow("Type", file['type'] ?? 'unknown'),
+            _buildDetailRow("Modified", _formatDate(file['modified'] ?? 0)),
             const Divider(color: Colors.grey),
             Text(
-              file['path'],
+              file['path'] ?? 'N/A',
               style: const TextStyle(color: Colors.grey, fontSize: 10),
             ),
           ],
@@ -432,6 +627,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   }
 
   String _formatDate(int timestamp) {
+    if (timestamp == 0) return "Unknown";
+    
     final date = DateTime.fromMillisecondsSinceEpoch(timestamp);
     final now = DateTime.now();
     final diff = now.difference(date);
@@ -470,7 +667,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.device['name'], style: const TextStyle(fontSize: 14)),
+            Text(widget.device['name'] ?? 'Unknown Device', style: const TextStyle(fontSize: 14)),
             Text(
               _currentPath.length > 30 
                 ? "...${_currentPath.substring(_currentPath.length - 30)}" 
@@ -501,7 +698,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                   itemCount: _files.length,
                   itemBuilder: (context, index) {
                     final file = _files[index];
-                    final isDirectory = file['is_directory'];
+                    final isDirectory = file['is_directory'] ?? false;
                     
                     return GestureDetector(
                       onTap: () => _openItem(file),
@@ -512,7 +709,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                           color: const Color(0xFF111111),
                           border: Border(
                             left: BorderSide(
-                              color: _getFileColor(file['type']),
+                              color: _getFileColor(file['type'] ?? 'file'),
                               width: 3,
                             ),
                           ),
@@ -524,8 +721,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                         child: Row(
                           children: [
                             Icon(
-                              _getFileIcon(file['type']),
-                              color: _getFileColor(file['type']),
+                              _getFileIcon(file['type'] ?? 'file'),
+                              color: _getFileColor(file['type'] ?? 'file'),
                               size: 28,
                             ),
                             const SizedBox(width: 12),
@@ -534,7 +731,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    file['name'],
+                                    file['name'] ?? 'Unknown',
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 14,
@@ -546,7 +743,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                                   if (!isDirectory) ...[
                                     const SizedBox(height: 4),
                                     Text(
-                                      _formatSize(file['size']),
+                                      _formatSize(file['size'] ?? 0),
                                       style: const TextStyle(
                                         color: Colors.grey,
                                         fontSize: 11,
