@@ -236,9 +236,9 @@ class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingOb
         onTap: (index) => setState(() => _currentIndex = index),
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.import_export), label: "DATALINK"),
-          BottomNavigationBarItem(icon: Icon(Icons.content_paste), label: "CLIPBOARD"),
-          BottomNavigationBarItem(icon: Icon(Icons.storage), label: "STORAGE"),
-          BottomNavigationBarItem(icon: Icon(Icons.terminal), label: "SYSTEM LOG"),
+          BottomNavigationBarItem(icon: Icon(Icons.content_paste), label: "SYNCPASTE"),
+          BottomNavigationBarItem(icon: Icon(Icons.storage), label: "FILEVAULT"),
+          BottomNavigationBarItem(icon: Icon(Icons.terminal), label: "SYSTEMPULSE"),
         ],
       ),
     );
