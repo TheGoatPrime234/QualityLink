@@ -157,13 +157,26 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     });
 
     _datalink.addProgressListener((id, progress, message) {
-      print("🔍 PROGRESS UPDATE: $id - $progress - $message");  // ← NEU
+      print("🔍 PROGRESS UPDATE: $id - $progress - $message");
       if (mounted) {
         setState(() {
           _progressValue = progress;
           _progressMessage = message ?? "";
+          
+          // ✅ NEU: Auto-detect Mode
+          if (message != null) {
+            final lowerMsg = message.toLowerCase();
+            if (lowerMsg.contains("p2p")) {
+              _progressMode = ProgressBarMode.p2p;
+            } else if (lowerMsg.contains("relay")) {
+              _progressMode = ProgressBarMode.relay;
+            } else if (lowerMsg.contains("zip")) {
+              _progressMode = ProgressBarMode.zipping;
+            } else if (lowerMsg.contains("upload")) {
+              _progressMode = ProgressBarMode.uploading;
+            }
+          }
         });
-        print("🔍 UI updated - progress: $_progressValue, msg: $_progressMessage");  // ← NEU
         _updateOverlayService();
       }
     });

@@ -224,39 +224,50 @@ class DataLinkService {
 
       try {
         // Headers setzen
+        final totalBytes = file.lengthSync();
         request.response.headers.add("Connection", "keep-alive");
         request.response.headers.add("Content-Type", "application/octet-stream");
-        request.response.headers.add("Content-Length", file.lengthSync());
+        request.response.headers.add("Content-Length", totalBytes);
         request.response.headers.add(
           "Content-Disposition",
           'attachment; filename="${p.basename(filePath)}"',
         );
 
-        // File streamen
+        // ✅ Processing State setzen für Upload
+        _notifyProcessingState(true);
+        _notifyProgress(filePath, 0.0, "Sending via P2P...");
+
+        // File streamen mit Progress
         int sentBytes = 0;
-        final totalBytes = file.lengthSync();
         
         await for (var chunk in file.openRead()) {
           request.response.add(chunk);
           sentBytes += chunk.length;
           
-          // Progress alle 1 MB updaten
-          if (sentBytes % (1024 * 1024) == 0 || sentBytes == totalBytes) {
+          // ✅ Progress alle 512KB oder bei Completion
+          if (sentBytes % (512 * 1024) == 0 || sentBytes == totalBytes) {
             _notifyProgress(
               filePath,
               sentBytes / totalBytes,
-              "${(sentBytes / 1024 / 1024).toStringAsFixed(1)} MB sent",
+              "${_formatBytes(sentBytes)} / ${_formatBytes(totalBytes)} sent",
             );
           }
         }
 
         await request.response.close();
+        
+        // ✅ Final Progress
+        _notifyProgress(filePath, 1.0, "P2P upload complete!");
         print("✅ P2P upload completed: ${p.basename(filePath)}");
+        
+        // ✅ Processing State zurücksetzen
+        _notifyProcessingState(false);
         
       } catch (e) {
         print("❌ P2P upload error: $e");
         request.response.statusCode = 500;
         await request.response.close();
+        _notifyProcessingState(false);
       }
     } else {
       request.response.statusCode = 404;
@@ -699,25 +710,70 @@ final targetFile = File(p.join(downloadPath, transfer.fileName));
       final file = File(filePath);
       final fileSize = file.lengthSync();
       
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse('$serverBaseUrl/upload'),
-      );
+      // ✅ Nutze StreamedRequest für Progress Tracking
+      final uri = Uri.parse('$serverBaseUrl/upload');
+      final request = http.StreamedRequest('POST', uri);
+      
+      // Multipart form data manuell erstellen
+      final boundary = 'dart-boundary-${DateTime.now().millisecondsSinceEpoch}';
+      request.headers['Content-Type'] = 'multipart/form-data; boundary=$boundary';
+      
+      // Transfer ID als Field
+      final transferIdField = '--$boundary\r\n'
+          'Content-Disposition: form-data; name="transfer_id"\r\n\r\n'
+          '$transferId\r\n';
+      
+      // File als Field
+      final fileHeader = '--$boundary\r\n'
+          'Content-Disposition: form-data; name="file"; filename="${p.basename(filePath)}"\r\n'
+          'Content-Type: application/octet-stream\r\n\r\n';
+      
+      final endBoundary = '\r\n--$boundary--\r\n';
+      
+      // Berechne Content-Length
+      final headerBytes = utf8.encode(transferIdField + fileHeader);
+      final endBytes = utf8.encode(endBoundary);
+      final totalSize = headerBytes.length + fileSize + endBytes.length;
+      request.contentLength = totalSize;
+      
+      // ✅ Stream mit Progress Tracking
+      int uploadedBytes = 0;
+      
+      // Header senden
+      request.sink.add(headerBytes);
+      uploadedBytes += headerBytes.length;
+      
+      // File in Chunks streamen
+      final fileStream = file.openRead();
+      await for (var chunk in fileStream) {
+        request.sink.add(chunk);
+        uploadedBytes += chunk.length;
+        
+        // ✅ Progress Update alle 256KB oder bei Completion
+        if (uploadedBytes % (256 * 1024) == 0 || uploadedBytes >= headerBytes.length + fileSize) {
+          final progress = uploadedBytes / totalSize;
+          _notifyProgress(
+            transferId, 
+            progress,
+            "${_formatBytes(uploadedBytes)} / ${_formatBytes(totalSize)}"
+          );
+        }
+      }
+      
+      // End Boundary senden
+      request.sink.add(endBytes);
+      await request.sink.close();
 
-      request.fields['transfer_id'] = transferId;
-      request.files.add(await http.MultipartFile.fromPath('file', filePath));
+      final response = await request.send().timeout(const Duration(minutes: 60));
 
-      final streamedResponse = await request.send().timeout(
-        const Duration(minutes: 60),
-      );
-
-      if (streamedResponse.statusCode == 200) {
+      if (response.statusCode == 200) {
         _activeOperations.remove(transferId);
+        _notifyProgress(transferId, 1.0, "Upload complete!");
         await _reportTransferEvent(transferId, "completed", "Upload via Relay");
         _notifyMessage("☁️ Upload completed!");
         print("✅ Relay upload completed: ${p.basename(filePath)}");
       } else {
-        throw Exception("HTTP ${streamedResponse.statusCode}");
+        throw Exception("HTTP ${response.statusCode}");
       }
 
     } catch (e) {
