@@ -407,88 +407,95 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Column(
-        children: [
-          // Progress Bar
-          if (_isProcessing)
-            FuturisticProgressBar(
-              progress: _progressValue,
-              subtitle: _progressMessage,  // ✅ Richtig
-              mode: _progressMode,
-              label: "Processing", 
-            ),
-          
-          // Main Content  
-          Expanded(
-            child: SingleChildScrollView(
-              child: Column(  // <- Zeile 67
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header Info
-                  _buildHeader(),
-                  
-                  const SizedBox(height: 20),
-                  
-                  // Download Path Selector
-                  _buildPathSelector(),
-                  
-                  const Divider(),
-                  
-                  // Peers - Same LAN
-                  if (sameLanPeers.isNotEmpty) ...[
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Text(
-                        "SAME NETWORK (P2P)",
-                        style: TextStyle(
-                          color: Color(0xFF00FF41),
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    _buildPeerList(sameLanPeers),
-                  ],
-                  
-                  // Peers - Other
-                  if (otherPeers.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Text(
-                        "ONLINE (RELAY ONLY)",
-                        style: TextStyle(
-                          color: Colors.orange,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    _buildPeerList(otherPeers),
-                  ],
-                  
-                  // Empty State
-                  if (_peers.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(32),
-                      child: Center(
+      // ✅ FIX: SafeArea hinzufügen
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Progress Bar (soll auch unterhalb der Statusleiste erscheinen)
+            if (_isProcessing)
+              FuturisticProgressBar(
+                progress: _progressValue,
+                subtitle: _progressMessage,
+                mode: _progressMode,
+                label: "Processing", 
+              ),
+            
+            // Main Content  
+            Expanded(
+              child: SingleChildScrollView(
+                // ✅ OPTIONAL: Extra Padding unten, damit man auch das letzte Element gut sieht
+                padding: const EdgeInsets.only(bottom: 20), 
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Header Info
+                    _buildHeader(),
+                    
+                    const SizedBox(height: 20),
+                    
+                    // Download Path Selector
+                    _buildPathSelector(),
+                    
+                    const Divider(),
+                    
+                    // ... (Rest bleibt gleich)
+                    
+                    // Peers - Same LAN
+                    if (sameLanPeers.isNotEmpty) ...[
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16),
                         child: Text(
-                          "No devices detected...",
-                          style: TextStyle(color: Colors.grey),
+                          "SAME NETWORK (P2P)",
+                          style: TextStyle(
+                            color: Color(0xFF00FF41),
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
-                    ),
-                  
-                  // Send Buttons
-                  _buildActionButtons(),
-                  
-                  const Divider(),
-                  
-                  // Activity Log
-                  _buildActivityLog(),
-                ],
+                      _buildPeerList(sameLanPeers),
+                    ],
+                    
+                    // Peers - Other
+                    if (otherPeers.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16),
+                        child: Text(
+                          "ONLINE (RELAY ONLY)",
+                          style: TextStyle(
+                            color: Colors.orange,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      _buildPeerList(otherPeers),
+                    ],
+                    
+                    // Empty State
+                    if (_peers.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Center(
+                          child: Text(
+                            "No devices detected...",
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                      ),
+                    
+                    // Send Buttons
+                    _buildActionButtons(),
+                    
+                    const Divider(),
+                    
+                    // Activity Log
+                    _buildActivityLog(),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -778,6 +785,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
             ),
           ),
         ),
+        // Du kannst diesen Abstand hier auch verringern, z.B. auf 4
         const SizedBox(height: 8),
         
         if (_transfers.isEmpty)
@@ -794,6 +802,8 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
           ListView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
+            // ✅ FIX 2: Entfernt den automatischen Abstand oben in der Liste
+            padding: EdgeInsets.zero, 
             itemCount: _transfers.length,
             itemBuilder: (context, index) {
               final transfer = _transfers[index];
@@ -820,10 +830,21 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     }
 
     return ListTile(
-      leading: Icon(icon, color: iconColor),
+      // ✅ WICHTIG: dense: true ist WEG (damit Schrift/Icons normal groß bleiben)
+      
+      // ✅ Zieht die Zeile vertikal zusammen (-4 ist das Maximum an "Enge")
+      visualDensity: const VisualDensity(horizontal: 0, vertical: -3), 
+      
+      // ✅ Entfernt unnötigen Innenabstand oben/unten
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+      
+      // Optional: Verringert Abstand zwischen Titel und Untertitel
+      minVerticalPadding: 0, 
+      
+      leading: Icon(icon, color: iconColor), // Normale Icon-Größe
       title: Text(
         transfer.fileName,
-        style: const TextStyle(fontSize: 14),
+        style: const TextStyle(fontSize: 18), // Normale Schriftgröße
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
@@ -835,7 +856,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
                 : "${transfer.status.name} • ${transfer.progressFormatted}",
         style: TextStyle(
           color: transfer.isCompleted ? const Color(0xFF00FF41) : Colors.grey,
-          fontSize: 11,
+          fontSize: 13,
         ),
       ),
       trailing: transfer.isActive
