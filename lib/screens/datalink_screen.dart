@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -157,41 +158,73 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     });
 
     _datalink.addProgressListener((id, progress, message) {
-      print("🔍 PROGRESS UPDATE: $id - $progress - $message");
       if (mounted) {
         setState(() {
           _progressValue = progress;
           _progressMessage = message ?? "";
           
-          // ✅ NEU: Auto-detect Mode
           if (message != null) {
             final lowerMsg = message.toLowerCase();
-            if (lowerMsg.contains("p2p")) {
-              _progressMode = ProgressBarMode.p2p;
-            } else if (lowerMsg.contains("relay")) {
-              _progressMode = ProgressBarMode.relay;
-            } else if (lowerMsg.contains("zip")) {
-              _progressMode = ProgressBarMode.zipping;
-            } else if (lowerMsg.contains("upload")) {
-              _progressMode = ProgressBarMode.uploading;
-            }
+            if (lowerMsg.contains("p2p")) _progressMode = ProgressBarMode.p2p;
+            else if (lowerMsg.contains("relay")) _progressMode = ProgressBarMode.relay;
+            else if (lowerMsg.contains("zip")) _progressMode = ProgressBarMode.zipping;
+            else if (lowerMsg.contains("upload")) _progressMode = ProgressBarMode.uploading;
           }
         });
+        
+        // Update Service (Visuell)
         _updateOverlayService();
+
+        // ✅ Wenn 100% -> Nur Benachrichtigung, KEIN STOP
+        if (progress >= 1.0 && _isProcessing) {
+           OverlayForegroundService.showCompletionNotification(
+             message ?? "Transfer successfully finished."
+           );
+           // Hier wurde früher gestoppt -> jetzt nicht mehr!
+        }
       }
     });
 
     _datalink.addMessageListener((message, isError) {
       _showSnack(message, isError: isError);
+      if (isError && Platform.isAndroid) {
+         OverlayForegroundService.showStatusNotification(
+           title: "❌ Transfer Failed", 
+           body: message
+         );
+         // Bei Fehler setzen wir auf "Idle" zurück
+         OverlayForegroundService.updateOverlay(
+           status: "Ready", 
+           progress: 0.0, 
+           mode: "idle"
+         );
+      }
     });
 
     _datalink.addProcessingListener((isProcessing) {
-      print("🔍 PROCESSING STATE CHANGED: $isProcessing");  // ← NEU
       if (mounted) {
         setState(() => _isProcessing = isProcessing);
-        print("🔍 UI updated - _isProcessing: $_isProcessing");  // ← NEU
+        
         if (isProcessing) {
+          // START: Laute Benachrichtigung + Service Start/Update
+          if (Platform.isAndroid) {
+            OverlayForegroundService.showStatusNotification(
+              title: "🚀 Transfer Started",
+              body: "Processing files...",
+            );
+          }
           _ensureOverlayServiceStarted();
+          
+        } else {
+          // ✅ ENDE: Wir stoppen NICHTS. Wir setzen nur auf "Idle".
+          // Das verhindert Probleme mit dem Neustart des Services.
+          if (Platform.isAndroid) {
+            OverlayForegroundService.updateOverlay(
+              status: "QualityLink Ready",
+              progress: 0.0,
+              mode: "idle",
+            );
+          }
         }
       }
     });
