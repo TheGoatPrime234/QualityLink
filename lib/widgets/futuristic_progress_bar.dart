@@ -83,10 +83,10 @@ class _FuturisticProgressBarState extends State<FuturisticProgressBar>
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF0A0A0A),
-        border: Border.all(color: color.withOpacity(0.3), width: 1),
+        border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.2),
+            color: color.withValues(alpha: 0.2),
             blurRadius: 20,
             spreadRadius: 2,
           ),
@@ -145,7 +145,7 @@ class _FuturisticProgressBarState extends State<FuturisticProgressBar>
                 height: 8,
                 decoration: BoxDecoration(
                   color: const Color(0xFF1A1A1A),
-                  border: Border.all(color: color.withOpacity(0.3), width: 1),
+                  border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
                 ),
               ),
 
@@ -161,9 +161,9 @@ class _FuturisticProgressBarState extends State<FuturisticProgressBar>
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           colors: [
-                            color.withOpacity(0.0),
+                            color.withValues(alpha: 0.0),
                             color,
-                            color.withOpacity(0.0),
+                            color.withValues(alpha: 0.0),
                           ],
                         ),
                         boxShadow: [
@@ -188,7 +188,7 @@ class _FuturisticProgressBarState extends State<FuturisticProgressBar>
                     gradient: LinearGradient(
                       colors: [
                         color,
-                        color.withOpacity(0.6),
+                        color.withValues(alpha: 0.6),
                       ],
                       begin: Alignment.centerLeft,
                       end: Alignment.centerRight,
@@ -246,7 +246,7 @@ class HexagonPatternPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = color.withOpacity(0.1)
+      ..color = color.withValues(alpha: 0.1)
       ..strokeWidth = 0.5
       ..style = PaintingStyle.stroke;
 

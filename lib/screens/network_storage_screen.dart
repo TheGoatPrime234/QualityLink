@@ -135,7 +135,7 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
           content: Text(message),
           backgroundColor: isError 
               ? Colors.red 
-              : const Color(0xFF00FF41).withOpacity(0.3),
+              : const Color(0xFF00FF41).withValues(alpha: 0.3),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -161,7 +161,7 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
                 boxShadow: _isConnected 
                     ? [
                         BoxShadow(
-                          color: const Color(0xFF00FF41).withOpacity(0.5),
+                          color: const Color(0xFF00FF41).withValues(alpha: 0.5),
                           blurRadius: 8,
                           spreadRadius: 2,
                         )
@@ -202,7 +202,7 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.devices_other, size: 64, color: Colors.grey.withOpacity(0.3)),
+          Icon(Icons.devices_other, size: 64, color: Colors.grey.withValues(alpha: 0.3)),
           const SizedBox(height: 16),
           Text(
             _isConnected 
@@ -302,13 +302,13 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
                             Icon(
                               Icons.folder_shared,
                               size: 12,
-                              color: const Color(0xFF00FF41).withOpacity(0.7),
+                              color: const Color(0xFF00FF41).withValues(alpha: 0.7),
                             ),
                             const SizedBox(width: 4),
                             Text(
                               "${(device['available_paths'] as List?)?.length ?? 0} storage location(s)",
                               style: TextStyle(
-                                color: const Color(0xFF00FF41).withOpacity(0.7),
+                                color: const Color(0xFF00FF41).withValues(alpha: 0.7),
                                 fontSize: 11,
                               ),
                             ),
@@ -316,13 +316,13 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
                             Icon(
                               Icons.folder_off,
                               size: 12,
-                              color: Colors.grey.withOpacity(0.5),
+                              color: Colors.grey.withValues(alpha: 0.5),
                             ),
                             const SizedBox(width: 4),
                             Text(
                               "File sharing not available",
                               style: TextStyle(
-                                color: Colors.grey.withOpacity(0.5),
+                                color: Colors.grey.withValues(alpha: 0.5),
                                 fontSize: 11,
                               ),
                             ),
@@ -648,7 +648,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(message),
-          backgroundColor: isError ? Colors.red : const Color(0xFF00FF41).withOpacity(0.3),
+          backgroundColor: isError ? Colors.red : const Color(0xFF00FF41).withValues(alpha: 0.3),
         ),
       );
     }

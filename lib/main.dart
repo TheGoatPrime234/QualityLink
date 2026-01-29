@@ -65,7 +65,7 @@ class QualityLinkApp extends StatelessWidget {
       cardTheme: CardThemeData(
         color: const Color(0xFF121212),
         shape: RoundedRectangleBorder(
-            side: BorderSide(color: Colors.white.withOpacity(0.05), width: 1),
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.05), width: 1),
             borderRadius: BorderRadius.circular(4)),
       ),
       bottomNavigationBarTheme: const BottomNavigationBarThemeData(

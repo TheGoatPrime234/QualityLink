@@ -382,7 +382,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: isError ? Colors.red : const Color(0xFF00FF41).withOpacity(0.3),
+        backgroundColor: isError ? Colors.red : const Color(0xFF00FF41).withValues(alpha: 0.3),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -525,7 +525,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
                   boxShadow: _isConnected
                       ? [
                           BoxShadow(
-                            color: const Color(0xFF00FF41).withOpacity(0.5),
+                            color: const Color(0xFF00FF41).withValues(alpha: 0.5),
                             blurRadius: 8,
                             spreadRadius: 2,
                           )
@@ -612,12 +612,12 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: isSelected
-              ? const Color(0xFF00FF41).withOpacity(0.1)
+              ? const Color(0xFF00FF41).withValues(alpha: 0.1)
               : const Color(0xFF151515),
           border: Border.all(
             color: isSelected
                 ? const Color(0xFF00FF41)
-                : Colors.grey.withOpacity(0.3),
+                : Colors.grey.withValues(alpha: 0.3),
           ),
         ),
         child: Row(
@@ -684,7 +684,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
               margin: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: isSelected
-                    ? const Color(0xFF00FF41).withOpacity(0.2)
+                    ? const Color(0xFF00FF41).withValues(alpha: 0.2)
                     : const Color(0xFF111111),
                 border: Border.all(
                   color: isSelected ? const Color(0xFF00FF41) : Colors.grey,
@@ -754,7 +754,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
               icon: const Icon(Icons.folder),
               label: const Text("FOLDER"),
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF0055).withOpacity(0.2),
+                backgroundColor: const Color(0xFFFF0055).withValues(alpha: 0.2),
                 minimumSize: const Size(0, 48),
               ),
             ),
