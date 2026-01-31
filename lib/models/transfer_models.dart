@@ -33,6 +33,7 @@ class Transfer {
   final DateTime createdAt;
   final DateTime? completedAt;
   final String? errorMessage;
+  final String? destinationPath;
 
   Transfer({
     required this.id,
@@ -48,6 +49,7 @@ class Transfer {
     DateTime? createdAt,
     this.completedAt,
     this.errorMessage,
+    this.destinationPath,
   }) : createdAt = createdAt ?? DateTime.now();
 
   Transfer copyWith({
@@ -64,6 +66,7 @@ class Transfer {
     DateTime? createdAt,
     DateTime? completedAt,
     String? errorMessage,
+    String? destinationPath,
   }) {
     return Transfer(
       id: id ?? this.id,
@@ -79,6 +82,7 @@ class Transfer {
       createdAt: createdAt ?? this.createdAt,
       completedAt: completedAt ?? this.completedAt,
       errorMessage: errorMessage ?? this.errorMessage,
+      destinationPath: destinationPath ?? this.destinationPath,
     );
   }
 
@@ -89,20 +93,24 @@ class Transfer {
     
     TransferStatus status;
     switch (statusStr) {
-      case 'OFFERED':
-        status = TransferStatus.offered;
-        break;
-      case 'RELAY_REQUESTED':
-        status = TransferStatus.relayRequested;
-        break;
-      case 'RELAY_READY':
-        status = TransferStatus.relayReady;
-        break;
-      case 'COMPLETED':
-        status = TransferStatus.completed;
-        break;
-      default:
-        status = TransferStatus.offered;
+      case 'OFFERED': status = TransferStatus.offered; break;
+      case 'RELAY_REQUESTED': status = TransferStatus.relayRequested; break;
+      case 'RELAY_READY': status = TransferStatus.relayReady; break;
+      case 'COMPLETED': status = TransferStatus.completed; break;
+      default: status = TransferStatus.offered;
+    }
+
+    // ✅ LOGIK: Pfad wiederherstellen
+    String? destPath = meta['destination_path'] as String?;
+    
+    // Wenn der Server das Feld gelöscht hat, holen wir es aus dem Link zurück
+    if (destPath == null && meta['direct_link'] != null) {
+      try {
+        final uri = Uri.parse(meta['direct_link']);
+        destPath = uri.queryParameters['save_path']; // Hier lesen wir es aus!
+      } catch (e) {
+        // Ignorieren bei Parse-Fehlern
+      }
     }
 
     return Transfer(
@@ -116,6 +124,7 @@ class Transfer {
       createdAt: DateTime.fromMillisecondsSinceEpoch(
         (json['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch,
       ),
+      destinationPath: destPath, // ✅ Der wiederhergestellte Pfad
     );
   }
 

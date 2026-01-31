@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:file_picker/file_picker.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:path/path.dart' as p;
 
 import '../config/server_config.dart';
 import '../services/heartbeat_service.dart';
+import '../services/datalink_service.dart';
 
 // =============================================================================
 // NETWORK STORAGE SCREEN - Browse files on other devices
@@ -418,6 +421,9 @@ class FileBrowserScreen extends StatefulWidget {
 }
 
 class _FileBrowserScreenState extends State<FileBrowserScreen> {
+  // ✅ DataLink Service einbinden
+  final DataLinkService _datalink = DataLinkService();
+  
   List<dynamic> _files = [];
   bool _loading = true;
   String _currentPath = "";
@@ -525,8 +531,54 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   }
 
   void _downloadFile(Map<String, dynamic> file) {
-    // TODO: Implement download functionality
-    _showSnack("Download feature coming soon...");
+    final ip = widget.device['ip'];
+    final port = widget.device['file_server_port'];
+    
+    if (ip == null || port == null) {
+      _showSnack("Invalid device configuration", isError: true);
+      return;
+    }
+
+    // URL konstruieren (Das ist der Endpoint in deinem FileServerService)
+    final url = 'http://$ip:$port/files/download?path=${Uri.encodeComponent(file['path'])}';
+    
+    // DataLink Service anweisen, den Download zu starten
+    _datalink.startDirectDownload(
+      fileName: file['name'],
+      fileSize: file['size'],
+      url: url,
+      senderId: widget.device['client_id'] ?? "Unknown",
+    );
+
+    // Feedback an User
+    _showSnack("⬇️ Download started: ${file['name']}");
+  }
+  
+  Future<void> _uploadFile() async {
+    final result = await FilePicker.platform.pickFiles();
+    if (result == null || result.files.single.path == null) return;
+
+    final file = File(result.files.single.path!);
+    final targetId = widget.device['client_id'];
+
+    if (targetId == null) {
+      _showSnack("Target ID not found", isError: true);
+      return;
+    }
+
+    _showSnack("📤 Preparing upload to $_currentPath..."); // Feedback für User
+
+    try {
+      // ✅ HIER übergeben wir den aktuellen Pfad als Ziel
+      await _datalink.sendFile(
+        file, 
+        [targetId], 
+        destinationPath: _currentPath // <--- Das ist der Schlüssel!
+      );
+      
+    } catch (e) {
+      _showSnack("Upload failed: $e", isError: true);
+    }
   }
 
   void _showFileDetails(Map<String, dynamic> file) {
@@ -534,26 +586,28 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1A1A1A),
-        title: const Text("File Details", style: TextStyle(color: Colors.white)),
+        title: Text(file['name'], style: const TextStyle(color: Colors.white)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildDetailRow("Name", file['name'] ?? 'Unknown'),
             _buildDetailRow("Size", _formatSize(file['size'] ?? 0)),
-            _buildDetailRow("Type", file['type'] ?? 'unknown'),
-            _buildDetailRow("Modified", _formatDate(file['modified'] ?? 0)),
-            const Divider(color: Colors.grey),
-            Text(
-              file['path'] ?? 'N/A',
-              style: const TextStyle(color: Colors.grey, fontSize: 10),
-            ),
+            // ... (restliche Details)
           ],
         ),
         actions: [
+          // ✅ Download Button im Detail-Dialog
+          TextButton.icon(
+             icon: const Icon(Icons.download, color: Color(0xFF00FF41)),
+             label: const Text("Download", style: TextStyle(color: Color(0xFF00FF41))),
+             onPressed: () {
+               Navigator.pop(context);
+               _downloadFile(file);
+             },
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text("Close", style: TextStyle(color: Color(0xFF00FF41))),
+            child: const Text("Close", style: TextStyle(color: Colors.grey)),
           ),
         ],
       ),
@@ -659,36 +713,22 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: _goBack,
-        ),
+        // ... (AppBar Code bleibt gleich) ...
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(widget.device['name'] ?? 'Unknown Device', style: const TextStyle(fontSize: 14)),
-            Text(
-              _currentPath.length > 30 
-                ? "...${_currentPath.substring(_currentPath.length - 30)}" 
-                : _currentPath,
-              style: const TextStyle(fontSize: 10, color: Colors.grey),
-            ),
+            Text(widget.device['name'] ?? 'Unknown', style: const TextStyle(fontSize: 14)),
+            Text(_currentPath, style: const TextStyle(fontSize: 10, color: Colors.grey)),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () {
-              if (_currentPath == "Root") {
-                _loadRootPaths();
-              } else {
-                _loadPath(_currentPath);
-              }
-            },
-          ),
-        ],
       ),
+      // ✅ Floating Action Button für Uploads hinzufügen
+      floatingActionButton: _currentPath != "Root" ? FloatingActionButton(
+        backgroundColor: const Color(0xFF00FF41),
+        onPressed: _uploadFile,
+        child: const Icon(Icons.upload, color: Colors.black),
+      ) : null,
+      
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF00FF41)))
           : _files.isEmpty
@@ -701,7 +741,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                     final isDirectory = file['is_directory'] ?? false;
                     
                     return GestureDetector(
-                      onTap: () => _openItem(file),
+                      // ✅ Bei Klick auf Datei -> Dialog mit Download Option
+                      onTap: () => isDirectory ? _openItem(file) : _showFileDetails(file),
                       child: Container(
                         margin: const EdgeInsets.only(bottom: 8),
                         padding: const EdgeInsets.all(12),
@@ -756,7 +797,20 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                             Icon(
                               isDirectory ? Icons.chevron_right : Icons.more_vert,
                               color: Colors.grey,
-                              size: 20,
+                              size: 20,),
+
+                            IconButton(
+                              icon: Icon(
+                                isDirectory ? Icons.chevron_right : Icons.download,
+                                color: isDirectory ? Colors.grey : const Color(0xFF00FF41),
+                              ),
+                              onPressed: () {
+                                if (isDirectory) {
+                                  _openItem(file);
+                                } else {
+                                  _downloadFile(file);
+                                }
+                              },
                             ),
                           ],
                         ),

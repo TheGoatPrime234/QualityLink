@@ -417,7 +417,7 @@ _transfers[existingIndex] = transfer;
 // =============================================================================
 
 /// Sendet eine einzelne Datei an Ziel-Geräte
-  Future<String> sendFile(File file, List<String> targetIds) async {
+  Future<String> sendFile(File file, List<String> targetIds, {String? destinationPath}) async {
     if (targetIds.isEmpty) {
       _notifyMessage("No targets selected", isError: true);
       throw Exception("No targets selected");
@@ -440,6 +440,7 @@ _transfers[existingIndex] = transfer;
         filePath: file.path,
         targetId: targetId,
         transferId: transferId,
+        destinationPath: destinationPath,
       );
     }
 
@@ -448,7 +449,7 @@ _transfers[existingIndex] = transfer;
   }
 
   /// Sendet mehrere Dateien
-  Future<List<String>> sendFiles(List<File> files, List<String> targetIds) async {
+  Future<List<String>> sendFiles(List<File> files, List<String> targetIds, {String? destinationPath}) async {
     final transferIds = <String>[];
     
     for (var file in files) {
@@ -493,7 +494,7 @@ _transfers[existingIndex] = transfer;
       _notifyMessage("📦 Folder compressed!");
 
       // Zip-File senden
-      final transferId = await sendFile(File(zipPath), targetIds);
+      final transferId = await sendFile(File(zipPath), targetIds, );
       
       // Zip in active operations speichern für Cleanup
       _activeOperations[transferId] = zipPath;
@@ -513,28 +514,40 @@ _transfers[existingIndex] = transfer;
     required String filePath,
     required String targetId,
     required String transferId,
+    String? destinationPath,
   }) async {
     final fileName = p.basename(filePath);
     final fileSize = File(filePath).lengthSync();
-    final directLink = "http://$_myLocalIp:${_localServer!.port}/download/${Uri.encodeComponent(filePath)}";
+    
+    // Basis-Link erstellen
+    String directLink = "http://$_myLocalIp:${_localServer!.port}/download/${Uri.encodeComponent(filePath)}";
+
+    // ✅ TRICK: Pfad an den Link anhängen, damit er den Server überlebt
+    if (destinationPath != null) {
+      directLink += "?save_path=${Uri.encodeComponent(destinationPath)}";
+    }
 
     try {
+      final Map<String, dynamic> requestBody = {
+        "transfer_id": transferId,
+        "sender_id": _clientId,
+        "target_id": targetId,
+        "file_name": fileName,
+        "file_size": fileSize,
+        "direct_link": directLink, // Der Link enthält jetzt den Pfad!
+        // Wir senden das Feld trotzdem mit, falls der Server es doch mal unterstützt
+        if (destinationPath != null) "destination_path": destinationPath,
+      };
+
       final response = await http.post(
         Uri.parse('$serverBaseUrl/transfer/offer'),
         headers: {"Content-Type": "application/json"},
-        body: json.encode({
-          "transfer_id": transferId,
-          "sender_id": _clientId,
-          "target_id": targetId,
-          "file_name": fileName,
-          "file_size": fileSize,
-          "direct_link": directLink,
-        }),
+        body: json.encode(requestBody),
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         _activeOperations[transferId] = filePath;
-        print("✅ Offer sent: $fileName → $targetId");
+        print("✅ Offer sent: $fileName → $targetId (to: $destinationPath)");
       } else {
         throw Exception("Server returned ${response.statusCode}");
       }
@@ -571,7 +584,21 @@ _transfers[existingIndex] = transfer;
   Future<void> _handleOfferedTransfer(Transfer transfer, String downloadPath) async {
     _processedTransferIds.add(transfer.id);
     
-    final targetFile = File(p.join(downloadPath, transfer.fileName));
+    // ❌ LÖSCHEN: Diese Zeile muss weg, sie verursacht den Konflikt!
+    // final targetFile = File(p.join(downloadPath, transfer.fileName)); 
+    
+    // ✅ KORREKT: Variable deklarieren
+    File targetFile;
+
+    // Prüfen, ob ein spezieller Pfad vom Sender (FileVault) kommt
+    if (transfer.destinationPath != null && transfer.destinationPath!.isNotEmpty) {
+      // Speichern im gewünschten Ordner
+      targetFile = File(p.join(transfer.destinationPath!, transfer.fileName));
+      print("📂 Saving to specific path: ${targetFile.path}");
+    } else {
+      // Standard-Verhalten (Download Ordner)
+      targetFile = File(p.join(downloadPath, transfer.fileName));
+    }
     
     _notifyMessage("📥 Incoming: ${transfer.fileName}");
     
@@ -609,7 +636,7 @@ _transfers[existingIndex] = transfer;
 
   Future<void> _handleRelayReadyTransfer(Transfer transfer, String downloadPath) async {
     _processedTransferIds.add(transfer.id);
-final targetFile = File(p.join(downloadPath, transfer.fileName));
+    final targetFile = File(p.join(downloadPath, transfer.fileName));
     
     _notifyMessage("☁️ Downloading from relay: ${transfer.fileName}");
     
@@ -833,7 +860,68 @@ final targetFile = File(p.join(downloadPath, transfer.fileName));
       _notifyProcessingState(false);
     }
   }
+  Future<void> startDirectDownload({
+    required String fileName,
+    required String url,
+    required int fileSize,
+    required String senderId, // ID des Geräts, von dem wir laden
+  }) async {
+    // 1. Generiere eine Transfer-ID
+    final transferId = _generateTransferId();
+    final saveDir = Directory(_downloadPath.isNotEmpty ? _downloadPath : Directory.systemTemp.path);
+    final targetFile = File(p.join(saveDir.path, fileName));
 
+    print("⬇️ Starting direct download: $fileName from $url");
+
+    // 2. Erstelle ein künstliches Transfer-Objekt für die UI/Logs
+    final transfer = Transfer(
+      id: transferId,
+      fileName: fileName,
+      fileSize: fileSize,
+      senderId: senderId,
+      targetIds: [_clientId],
+      status: TransferStatus.downloading, // Sofort auf Downloading setzen
+      mode: TransferMode.p2p, // FileVault ist immer direkt (P2P)
+      progress: 0.0,
+      createdAt: DateTime.now(),
+      directLink: url, // WICHTIG: Die URL vom FileServer
+    );
+
+    // 3. Füge es zur Liste hinzu und benachrichtige Listener (damit UI updated)
+    _transfers.insert(0, transfer);
+    _notifyTransferUpdate(transfer);
+    
+    // 4. Starte den Download-Prozess (nutzt deine existierende Logik!)
+    // Wir rufen _tryP2PDownload auf, da dies bereits HTTP-Requests und Progress kann
+    final success = await _tryP2PDownload(transfer, targetFile);
+
+    // 5. Abschluss-Handling (wird teilweise schon in _tryP2PDownload gemacht, 
+    // aber wir müssen sicherstellen, dass der Status finalisiert wird)
+    if (success) {
+      final completedTransfer = transfer.copyWith(
+        status: TransferStatus.completed,
+        progress: 1.0,
+        completedAt: DateTime.now(),
+      );
+      final index = _transfers.indexWhere((t) => t.id == transferId);
+      if (index != -1) {
+        _transfers[index] = completedTransfer;
+        _notifyTransferUpdate(completedTransfer);
+      }
+      _notifyMessage("✅ Download complete: $fileName");
+    } else {
+       final failedTransfer = transfer.copyWith(
+        status: TransferStatus.failed,
+        errorMessage: "Connection failed",
+      );
+       final index = _transfers.indexWhere((t) => t.id == transferId);
+      if (index != -1) {
+        _transfers[index] = failedTransfer;
+        _notifyTransferUpdate(failedTransfer);
+      }
+      _notifyMessage("❌ Download failed", isError: true);
+    }
+  }
   // =============================================================================
   // FOLDER ZIP (ISOLATE)
   // =============================================================================
