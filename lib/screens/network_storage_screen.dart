@@ -433,6 +433,9 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   // ✅ NEU: Sortier-Status
   FileSortOption _currentSort = FileSortOption.name;
   bool _sortAscending = true;
+  bool _isSearching = false;
+  final TextEditingController _searchController = TextEditingController();
+  List<dynamic> _originalFiles = []; // Backup für die Ordner-Ansicht
 
   @override
   void initState() {
@@ -573,6 +576,54 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     );
 
     _showSnack("⬇️ Download started: ${file['name']}");
+  }
+
+  // ✅ NEU: Führt die Suche aus
+  Future<void> _performSearch(String query) async {
+    if (query.isEmpty) return;
+
+    setState(() => _loading = true);
+
+    try {
+      final ip = widget.device['ip'];
+      final port = widget.device['file_server_port'];
+      
+      // Nutzt den neuen Search Endpoint
+      final url = Uri.parse(
+        'http://$ip:$port/files/search?path=${Uri.encodeComponent(_currentPath == "Root" ? widget.device['available_paths'][0] : _currentPath)}&query=${Uri.encodeComponent(query)}'
+      );
+      
+      final response = await http.get(url).timeout(const Duration(seconds: 15));
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final results = List<dynamic>.from(data['files'] ?? []);
+        
+        setState(() {
+          _files = results; // Überschreibe Liste mit Ergebnissen
+          _loading = false;
+        });
+      } else {
+        throw Exception("Search failed");
+      }
+    } catch (e) {
+      _showSnack("Search failed: $e", isError: true);
+      setState(() => _loading = false);
+    }
+  }
+
+  // ✅ NEU: Beendet Suche und stellt Ordner wieder her
+  void _stopSearch() {
+    setState(() {
+      _isSearching = false;
+      _searchController.clear();
+      // Wenn wir im Root waren, lade Root neu, sonst den Pfad
+      if (_currentPath == "Root") {
+        _loadRootPaths();
+      } else {
+        _loadPath(_currentPath);
+      }
+    });
   }
   
   Future<void> _uploadFile() async {
@@ -717,7 +768,10 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () {
-            if (_pathHistory.isEmpty) {
+            // ✅ Logik für Back-Button angepasst
+            if (_isSearching) {
+              _stopSearch();
+            } else if (_pathHistory.isEmpty) {
               Navigator.pop(context);
             } else {
               final prev = _pathHistory.removeLast();
@@ -726,41 +780,72 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
             }
           },
         ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(widget.device['name'] ?? 'Unknown', style: const TextStyle(fontSize: 14)),
-            Text(_currentPath, style: const TextStyle(fontSize: 10, color: Colors.grey)),
-          ],
-        ),
+        // ✅ Dynamischer Titel: Entweder Pfad oder Suchfeld
+        title: _isSearching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  hintText: "Search files...",
+                  hintStyle: TextStyle(color: Colors.grey),
+                  border: InputBorder.none,
+                ),
+                onSubmitted: _performSearch,
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.device['name'] ?? 'Unknown', style: const TextStyle(fontSize: 14)),
+                  Text(_currentPath, style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                ],
+              ),
         actions: [
-          // ✅ NEU: Sortier-Menu
-          PopupMenuButton<FileSortOption>(
-            icon: const Icon(Icons.sort, color: Color(0xFF00FF41)),
-            tooltip: "Sort files",
-            onSelected: (FileSortOption result) {
-              if (_currentSort == result) {
-                // Wenn gleich -> Richtung wechseln
+          // ✅ Search Toggle Button
+          if (!_isSearching)
+            IconButton(
+              icon: const Icon(Icons.search, color: Color(0xFF00FF41)),
+              onPressed: () {
                 setState(() {
-                  _sortAscending = !_sortAscending;
-                  _applySort();
+                  _isSearching = true;
+                  // Backup machen nicht nötig, da wir bei stopSearch eh neu laden
                 });
-              } else {
-                // Wenn neu -> Standard aufsteigend
-                setState(() {
-                  _currentSort = result;
-                  _sortAscending = true;
-                  _applySort();
-                });
-              }
-            },
-            itemBuilder: (BuildContext context) => <PopupMenuEntry<FileSortOption>>[
-              _buildSortItem(FileSortOption.name, "Name", Icons.sort_by_alpha),
-              _buildSortItem(FileSortOption.date, "Date", Icons.access_time),
-              _buildSortItem(FileSortOption.size, "Size", Icons.data_usage),
-              _buildSortItem(FileSortOption.type, "Type", Icons.category),
-            ],
-          ),
+              },
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.red),
+              onPressed: _stopSearch,
+            ),
+
+          // Sort Menu (nur anzeigen wenn nicht gesucht wird)
+          if (!_isSearching)
+            PopupMenuButton<FileSortOption>(
+              // ... (Dein existierender Sort Code) ...
+              icon: const Icon(Icons.sort, color: Color(0xFF00FF41)),
+               onSelected: (FileSortOption result) {
+                 // ... dein bestehender Code ...
+                 if (_currentSort == result) {
+                    setState(() {
+                      _sortAscending = !_sortAscending;
+                      _applySort();
+                    });
+                  } else {
+                    setState(() {
+                      _currentSort = result;
+                      _sortAscending = true;
+                      _applySort();
+                    });
+                  }
+               },
+               // ... item builder ...
+               itemBuilder: (BuildContext context) => <PopupMenuEntry<FileSortOption>>[
+                  _buildSortItem(FileSortOption.name, "Name", Icons.sort_by_alpha),
+                  _buildSortItem(FileSortOption.date, "Date", Icons.access_time),
+                  _buildSortItem(FileSortOption.size, "Size", Icons.data_usage),
+                  _buildSortItem(FileSortOption.type, "Type", Icons.category),
+               ],
+            ),
         ],
       ),
       

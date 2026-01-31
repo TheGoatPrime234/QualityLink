@@ -171,7 +171,6 @@ class FileServerService {
 
   static Future<void> _handleRequest(HttpRequest request) async {
     final path = request.uri.path;
-    
     print("📥 Request: ${request.method} $path");
 
     if (path == "/files/list") {
@@ -184,6 +183,8 @@ class FileServerService {
       await _handleGetPaths(request);
     } else if (path == "/ping") {
       await _handlePing(request);
+    } else if (path == "/files/search") { // ✅ NEU: Search Endpoint
+      await _handleSearchFiles(request);
     } else {
       request.response.statusCode = 404;
       request.response.write(json.encode({"error": "Endpoint not found"}));
@@ -268,6 +269,98 @@ class FileServerService {
       request.response.statusCode = 500;
       request.response.write(json.encode({"error": e.toString()}));
       await request.response.close();
+    }
+  }
+
+  // ✅ NEU: Rekursive Suchfunktion
+  static Future<void> _handleSearchFiles(HttpRequest request) async {
+    final params = request.uri.queryParameters;
+    final rootPath = params['path'];
+    final query = params['query']?.toLowerCase();
+    
+    if (rootPath == null || query == null || query.isEmpty) {
+      request.response.statusCode = 400;
+      request.response.write(json.encode({"error": "Missing path or query"}));
+      await request.response.close();
+      return;
+    }
+
+    if (!_isPathAllowed(rootPath)) {
+      request.response.statusCode = 403;
+      request.response.write(json.encode({"error": "Access denied"}));
+      await request.response.close();
+      return;
+    }
+
+    final dir = Directory(rootPath);
+    if (!dir.existsSync()) {
+      request.response.statusCode = 404;
+      request.response.write(json.encode({"error": "Directory not found"}));
+      await request.response.close();
+      return;
+    }
+
+    final results = <Map<String, dynamic>>[];
+    
+    // Starte Suche (mit Limit um Crashs bei "a" zu vermeiden)
+    await _recursiveSearch(dir, query, results, limit: 100);
+
+    request.response.statusCode = 200;
+    request.response.write(json.encode({
+      "query": query,
+      "files": results,
+      "count": results.length
+    }));
+    await request.response.close();
+  }
+
+  static Future<void> _recursiveSearch(
+    Directory dir, 
+    String query, 
+    List<Map<String, dynamic>> results, 
+    {int limit = 100}
+  ) async {
+    if (results.length >= limit) return;
+
+    try {
+      final entities = dir.listSync(recursive: false); // Nicht direkt rekursiv, um Kontrolle zu behalten
+      
+      for (var entity in entities) {
+        if (results.length >= limit) break;
+        
+        // Prüfen ob Name passt
+        final name = p.basename(entity.path);
+        if (name.toLowerCase().contains(query)) {
+          final isDirectory = entity is Directory;
+          int size = 0;
+          int modified = 0;
+          
+          try {
+            final stat = entity.statSync();
+            size = stat.size;
+            modified = stat.modified.millisecondsSinceEpoch;
+          } catch (e) {}
+
+          results.add({
+            "name": name,
+            "path": entity.path,
+            "is_directory": isDirectory,
+            "size": isDirectory ? 0 : size,
+            "modified": modified,
+            "type": isDirectory ? "folder" : _getFileType(entity.path),
+          });
+        }
+
+        // Rekursion: Wenn es ein Ordner ist, tauche tiefer ein
+        if (entity is Directory) {
+           // Skip System Folder / Hidden Folders
+           if (!name.startsWith('.') && !name.startsWith(r'$')) {
+             await _recursiveSearch(entity, query, results, limit: limit);
+           }
+        }
+      }
+    } catch (e) {
+      // Zugriff verweigert ignorieren
     }
   }
 
