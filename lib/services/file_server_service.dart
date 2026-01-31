@@ -4,6 +4,8 @@ import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart'; // ✅ WICHTIG für Android 11+
 
+import 'datalink_service.dart';
+
 class FileServerService {
   static HttpServer? _server;
   static int? _port;
@@ -187,6 +189,8 @@ class FileServerService {
       await _handleSearchFiles(request);
     } else if (path == "/files/delete") { // ✅ NEU: Delete Route
       await _handleDeleteFile(request);
+    } else if (path == "/files/share") { // ✅ NEU: Share Route
+      await _handleShareFile(request);
     } else {
       request.response.statusCode = 404;
       request.response.write(json.encode({"error": "Endpoint not found"}));
@@ -417,6 +421,64 @@ class FileServerService {
       print("❌ Delete error: $e");
       request.response.statusCode = 500;
       request.response.write(json.encode({"error": "Failed to delete: $e"}));
+    }
+    await request.response.close();
+  }
+
+  // ✅ NEU: Triggered einen DataLink Transfer vom Server aus
+  static Future<void> _handleShareFile(HttpRequest request) async {
+    if (request.method != 'POST') {
+       request.response.statusCode = 405;
+       await request.response.close();
+       return;
+    }
+
+    try {
+      final content = await utf8.decoder.bind(request).join();
+      final data = json.decode(content);
+      
+      final String? path = data['path'];
+      final List<dynamic>? targetIds = data['targets']; // Liste von IDs
+
+      if (path == null || targetIds == null || targetIds.isEmpty) {
+        request.response.statusCode = 400;
+        request.response.write(json.encode({"error": "Missing path or targets"}));
+        await request.response.close();
+        return;
+      }
+
+      if (!_isPathAllowed(path)) {
+        request.response.statusCode = 403;
+        request.response.write(json.encode({"error": "Access denied"}));
+        await request.response.close();
+        return;
+      }
+
+      final file = File(path);
+      if (!file.existsSync()) {
+        request.response.statusCode = 404;
+        request.response.write(json.encode({"error": "File not found"}));
+        await request.response.close();
+        return;
+      }
+
+      // 🔥 Hier rufen wir den DataLink Service auf DIESEM (Remote) Gerät auf
+      final ids = targetIds.map((e) => e.toString()).toList();
+      
+      // Wir starten den Transfer "Fire & Forget" mäßig, damit der HTTP Request nicht blockiert
+      DataLinkService().sendFile(file, ids).then((_) {
+        print("✅ Remote share started for $path");
+      }).catchError((e) {
+        print("❌ Remote share failed: $e");
+      });
+
+      request.response.statusCode = 200;
+      request.response.write(json.encode({"status": "transfer_started", "targets": ids.length}));
+
+    } catch (e) {
+      print("❌ Share error: $e");
+      request.response.statusCode = 500;
+      request.response.write(json.encode({"error": "Internal error: $e"}));
     }
     await request.response.close();
   }

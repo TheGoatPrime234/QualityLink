@@ -445,6 +445,23 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     _loadRootPaths();
   }
 
+  IconData _getDeviceIcon(String type) {
+    switch (type.toLowerCase()) {
+      case 'android':
+        return Icons.phone_android;
+      case 'ios':
+        return Icons.phone_iphone;
+      case 'windows':
+        return Icons.computer;
+      case 'macos':
+        return Icons.laptop_mac;
+      case 'linux':
+        return Icons.desktop_mac;
+      default:
+        return Icons.devices;
+    }
+  }
+
   // ✅ NEU: Zentrale Sortier-Methode
   void _applySort() {
     setState(() {
@@ -481,6 +498,109 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
         return _sortAscending ? result : -result;
       });
     });
+  }
+
+  Future<void> _showDevicePickerAndSend({String? singlePath}) async {
+    final pathsToSend = singlePath != null ? [singlePath] : _selectedPaths.toList();
+    if (pathsToSend.isEmpty) return;
+
+    List<dynamic> targets = [];
+    bool loading = true;
+
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) {
+          if (loading && targets.isEmpty) {
+             http.get(Uri.parse('$serverBaseUrl/storage/devices')).then((response) {
+               if (response.statusCode == 200 && mounted) {
+                 final data = json.decode(response.body);
+                 final allDevices = List<dynamic>.from(data['devices'] ?? []);
+                 setState(() {
+                   // Filtern: Nicht an sich selbst senden
+                   targets = allDevices.where((d) => 
+                     d['client_id'] != widget.device['client_id'] && 
+                     d['online'] == true
+                   ).toList();
+                   loading = false;
+                 });
+               }
+             });
+          }
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A1A),
+            title: const Text("Send to Device", style: TextStyle(color: Colors.white)),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: loading 
+                  ? const LinearProgressIndicator(color: Color(0xFF00FF41))
+                  : targets.isEmpty
+                      ? const Text("No other online devices found.", style: TextStyle(color: Colors.grey))
+                      : ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: targets.length,
+                          itemBuilder: (context, index) {
+                            final device = targets[index];
+                            return ListTile(
+                              leading: Icon(_getDeviceIcon(device['type']), color: Colors.white),
+                              title: Text(device['name'], style: const TextStyle(color: Colors.white)),
+                              subtitle: Text(device['ip'], style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                              onTap: () {
+                                Navigator.pop(context);
+                                _triggerRemoteSend(pathsToSend, device);
+                              },
+                            );
+                          },
+                        ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _triggerRemoteSend(List<String> paths, Map<String, dynamic> targetDevice) async {
+    _showSnack("🚀 Initiating transfer to ${targetDevice['name']}...");
+    
+    if (_isMultiSelectMode) _exitMultiSelectMode();
+
+    final ip = widget.device['ip'];
+    final port = widget.device['file_server_port'];
+    final targetId = targetDevice['client_id'];
+
+    int successCount = 0;
+
+    for (var path in paths) {
+      try {
+        final response = await http.post(
+          Uri.parse('http://$ip:$port/files/share'),
+          headers: {"Content-Type": "application/json"},
+          body: json.encode({
+            "path": path,
+            "targets": [targetId]
+          }),
+        ).timeout(const Duration(seconds: 5));
+
+        if (response.statusCode == 200) {
+          successCount++;
+        }
+      } catch (e) {
+        print("Failed to share $path: $e");
+      }
+    }
+
+    if (successCount > 0) {
+      _showSnack("✅ Started sending $successCount files to ${targetDevice['name']}");
+    } else {
+      _showSnack("❌ Failed to initiate transfer", isError: true);
+    }
   }
 
   Future<void> _loadRootPaths() async {
@@ -653,6 +773,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     }
   }
 
+  
+
   void _showFileDetails(Map<String, dynamic> file) {
     showDialog(
       context: context,
@@ -679,7 +801,14 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
             },
           ),
           const Spacer(), // Schiebt Download & Close nach rechts
-          
+          TextButton.icon(
+            icon: const Icon(Icons.send, color: Color(0xFF00E5FF)),
+            label: const Text("Send", style: TextStyle(color: Color(0xFF00E5FF))),
+            onPressed: () {
+              Navigator.pop(context);
+              _showDevicePickerAndSend(singlePath: file['path']);
+            },
+          ),
           TextButton.icon(
              icon: const Icon(Icons.download, color: Color(0xFF00FF41)),
              label: const Text("Download", style: TextStyle(color: Color(0xFF00FF41))),
@@ -808,6 +937,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     _showSnack("⬇️ Started $count downloads");
     _exitMultiSelectMode();
   }
+
+  // ✅ NEU: Dialog um Zielgerät zu wählen und Senden anzustoßen
 
   // ✅ NEU: Batch Delete
   Future<void> _deleteSelected() async {
@@ -1020,6 +1151,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
               onSelected: (value) {
                 if (value == 'download') _downloadSelected();
                 if (value == 'delete') _deleteSelected();
+                if (value == 'share') _showDevicePickerAndSend();
               },
               itemBuilder: (context) => [
                 const PopupMenuItem(
@@ -1029,6 +1161,16 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                       Icon(Icons.download, color: Color(0xFF00FF41)),
                       SizedBox(width: 12),
                       Text("Download Selected"),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'share',
+                  child: Row(
+                    children: [
+                      Icon(Icons.send, color: Color(0xFF00E5FF)),
+                      SizedBox(width: 12),
+                      Text("Send to Device"),
                     ],
                   ),
                 ),
