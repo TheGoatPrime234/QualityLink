@@ -406,10 +406,12 @@ class _NetworkStorageScreenState extends State<NetworkStorageScreen> {
     );
   }
 }
-
 // =============================================================================
 // FILE BROWSER SCREEN - Browse specific device
 // =============================================================================
+
+// ✅ NEU: Enum für Sortier-Optionen
+enum FileSortOption { name, date, size, type }
 
 class FileBrowserScreen extends StatefulWidget {
   final Map<String, dynamic> device;
@@ -421,7 +423,6 @@ class FileBrowserScreen extends StatefulWidget {
 }
 
 class _FileBrowserScreenState extends State<FileBrowserScreen> {
-  // ✅ DataLink Service einbinden
   final DataLinkService _datalink = DataLinkService();
   
   List<dynamic> _files = [];
@@ -429,10 +430,52 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   String _currentPath = "";
   final List<String> _pathHistory = [];
 
+  // ✅ NEU: Sortier-Status
+  FileSortOption _currentSort = FileSortOption.name;
+  bool _sortAscending = true;
+
   @override
   void initState() {
     super.initState();
     _loadRootPaths();
+  }
+
+  // ✅ NEU: Zentrale Sortier-Methode
+  void _applySort() {
+    setState(() {
+      _files.sort((a, b) {
+        // 1. Regel: Ordner immer zuerst
+        if (a['is_directory'] != b['is_directory']) {
+          return a['is_directory'] ? -1 : 1;
+        }
+
+        // 2. Regel: Gewählte Sortierung
+        int result = 0;
+        switch (_currentSort) {
+          case FileSortOption.name:
+            result = (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase());
+            break;
+          case FileSortOption.date:
+            result = (a['modified'] as int).compareTo(b['modified'] as int);
+            break;
+          case FileSortOption.size:
+            result = (a['size'] as int).compareTo(b['size'] as int);
+            break;
+          case FileSortOption.type:
+            // Bei Typ erst nach Typ sortieren, dann nach Namen
+            final typeA = a['type'] as String;
+            final typeB = b['type'] as String;
+            result = typeA.compareTo(typeB);
+            if (result == 0) {
+              result = (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase());
+            }
+            break;
+        }
+
+        // 3. Regel: Richtung (Ascending/Descending)
+        return _sortAscending ? result : -result;
+      });
+    });
   }
 
   Future<void> _loadRootPaths() async {
@@ -441,7 +484,6 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       _currentPath = "Root";
     });
     
-    // Zeige verfügbare Root-Pfade als Ordner
     final paths = List<String>.from(widget.device['available_paths'] ?? []);
     
     setState(() {
@@ -454,6 +496,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
         "modified": DateTime.now().millisecondsSinceEpoch,
       }).toList();
       _loading = false;
+      
+      _applySort(); // ✅ Sofort sortieren
     });
   }
 
@@ -469,7 +513,6 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       }
 
       final url = Uri.parse('http://$ip:$port/files/list?path=${Uri.encodeComponent(path)}');
-      print("🔄 Loading path from: $url");
       
       final response = await http.get(url).timeout(const Duration(seconds: 10));
       
@@ -477,19 +520,13 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
         final data = json.decode(response.body);
         final files = List<dynamic>.from(data['files'] ?? []);
         
-        // Sortiere: Ordner zuerst, dann alphabetisch
-        files.sort((a, b) {
-          if (a['is_directory'] != b['is_directory']) {
-            return a['is_directory'] ? -1 : 1;
-          }
-          return (a['name'] as String).compareTo(b['name'] as String);
-        });
-        
         if (mounted) {
           setState(() {
             _files = files;
             _currentPath = path;
             _loading = false;
+            
+            _applySort(); // ✅ Dateien sortiert anzeigen
           });
         }
       } else if (response.statusCode == 403) {
@@ -517,19 +554,6 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     }
   }
 
-  void _goBack() {
-    if (_pathHistory.isEmpty) {
-      Navigator.pop(context);
-    } else {
-      final previousPath = _pathHistory.removeLast();
-      if (previousPath == "Root") {
-        _loadRootPaths();
-      } else {
-        _loadPath(previousPath);
-      }
-    }
-  }
-
   void _downloadFile(Map<String, dynamic> file) {
     final ip = widget.device['ip'];
     final port = widget.device['file_server_port'];
@@ -539,10 +563,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       return;
     }
 
-    // URL konstruieren (Das ist der Endpoint in deinem FileServerService)
     final url = 'http://$ip:$port/files/download?path=${Uri.encodeComponent(file['path'])}';
     
-    // DataLink Service anweisen, den Download zu starten
     _datalink.startDirectDownload(
       fileName: file['name'],
       fileSize: file['size'],
@@ -550,7 +572,6 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       senderId: widget.device['client_id'] ?? "Unknown",
     );
 
-    // Feedback an User
     _showSnack("⬇️ Download started: ${file['name']}");
   }
   
@@ -566,16 +587,14 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       return;
     }
 
-    _showSnack("📤 Preparing upload to $_currentPath..."); // Feedback für User
+    _showSnack("📤 Preparing upload to $_currentPath...");
 
     try {
-      // ✅ HIER übergeben wir den aktuellen Pfad als Ziel
       await _datalink.sendFile(
         file, 
         [targetId], 
-        destinationPath: _currentPath // <--- Das ist der Schlüssel!
+        destinationPath: _currentPath
       );
-      
     } catch (e) {
       _showSnack("Upload failed: $e", isError: true);
     }
@@ -591,12 +610,12 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            _buildDetailRow("Type", file['type'].toString().toUpperCase()),
             _buildDetailRow("Size", _formatSize(file['size'] ?? 0)),
-            // ... (restliche Details)
+            _buildDetailRow("Modified", _formatDate(file['modified'] ?? 0)),
           ],
         ),
         actions: [
-          // ✅ Download Button im Detail-Dialog
           TextButton.icon(
              icon: const Icon(Icons.download, color: Color(0xFF00FF41)),
              label: const Text("Download", style: TextStyle(color: Color(0xFF00FF41))),
@@ -629,47 +648,29 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
 
   IconData _getFileIcon(String type) {
     switch (type) {
-      case 'folder':
-        return Icons.folder;
-      case 'image':
-        return Icons.image;
-      case 'video':
-        return Icons.videocam;
-      case 'audio':
-        return Icons.audiotrack;
-      case 'pdf':
-        return Icons.picture_as_pdf;
-      case 'document':
-        return Icons.description;
-      case 'archive':
-        return Icons.archive;
-      case 'apk':
-        return Icons.android;
-      case 'executable':
-        return Icons.settings_applications;
-      default:
-        return Icons.insert_drive_file;
+      case 'folder': return Icons.folder;
+      case 'image': return Icons.image;
+      case 'video': return Icons.videocam;
+      case 'audio': return Icons.audiotrack;
+      case 'pdf': return Icons.picture_as_pdf;
+      case 'document': return Icons.description;
+      case 'archive': return Icons.archive;
+      case 'apk': return Icons.android;
+      case 'executable': return Icons.settings_applications;
+      default: return Icons.insert_drive_file;
     }
   }
 
   Color _getFileColor(String type) {
     switch (type) {
-      case 'folder':
-        return const Color(0xFF00E5FF);
-      case 'image':
-        return Colors.purple;
-      case 'video':
-        return Colors.red;
-      case 'audio':
-        return Colors.orange;
-      case 'pdf':
-        return Colors.red;
-      case 'document':
-        return Colors.blue;
-      case 'archive':
-        return Colors.yellow;
-      default:
-        return Colors.grey;
+      case 'folder': return const Color(0xFF00E5FF);
+      case 'image': return Colors.purple;
+      case 'video': return Colors.red;
+      case 'audio': return Colors.orange;
+      case 'pdf': return Colors.red;
+      case 'document': return Colors.blue;
+      case 'archive': return Colors.yellow;
+      default: return Colors.grey;
     }
   }
 
@@ -682,14 +683,12 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
 
   String _formatDate(int timestamp) {
     if (timestamp == 0) return "Unknown";
-    
     final date = DateTime.fromMillisecondsSinceEpoch(timestamp);
     final now = DateTime.now();
     final diff = now.difference(date);
     
-    if (diff.inDays == 0) return "Today";
+    if (diff.inDays == 0) return "${date.hour}:${date.minute.toString().padLeft(2, '0')}";
     if (diff.inDays == 1) return "Yesterday";
-    if (diff.inDays < 7) return "${diff.inDays} days ago";
     return "${date.day}.${date.month}.${date.year}";
   }
 
@@ -713,7 +712,20 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        // ... (AppBar Code bleibt gleich) ...
+        backgroundColor: const Color(0xFF050505),
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () {
+            if (_pathHistory.isEmpty) {
+              Navigator.pop(context);
+            } else {
+              final prev = _pathHistory.removeLast();
+              if (prev == "Root") _loadRootPaths();
+              else _loadPath(prev);
+            }
+          },
+        ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -721,8 +733,37 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
             Text(_currentPath, style: const TextStyle(fontSize: 10, color: Colors.grey)),
           ],
         ),
+        actions: [
+          // ✅ NEU: Sortier-Menu
+          PopupMenuButton<FileSortOption>(
+            icon: const Icon(Icons.sort, color: Color(0xFF00FF41)),
+            tooltip: "Sort files",
+            onSelected: (FileSortOption result) {
+              if (_currentSort == result) {
+                // Wenn gleich -> Richtung wechseln
+                setState(() {
+                  _sortAscending = !_sortAscending;
+                  _applySort();
+                });
+              } else {
+                // Wenn neu -> Standard aufsteigend
+                setState(() {
+                  _currentSort = result;
+                  _sortAscending = true;
+                  _applySort();
+                });
+              }
+            },
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<FileSortOption>>[
+              _buildSortItem(FileSortOption.name, "Name", Icons.sort_by_alpha),
+              _buildSortItem(FileSortOption.date, "Date", Icons.access_time),
+              _buildSortItem(FileSortOption.size, "Size", Icons.data_usage),
+              _buildSortItem(FileSortOption.type, "Type", Icons.category),
+            ],
+          ),
+        ],
       ),
-      // ✅ Floating Action Button für Uploads hinzufügen
+      
       floatingActionButton: _currentPath != "Root" ? FloatingActionButton(
         backgroundColor: const Color(0xFF00FF41),
         onPressed: _uploadFile,
@@ -741,7 +782,6 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                     final isDirectory = file['is_directory'] ?? false;
                     
                     return GestureDetector(
-                      // ✅ Bei Klick auf Datei -> Dialog mit Download Option
                       onTap: () => isDirectory ? _openItem(file) : _showFileDetails(file),
                       child: Container(
                         margin: const EdgeInsets.only(bottom: 8),
@@ -783,12 +823,18 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                                   ),
                                   if (!isDirectory) ...[
                                     const SizedBox(height: 4),
-                                    Text(
-                                      _formatSize(file['size'] ?? 0),
-                                      style: const TextStyle(
-                                        color: Colors.grey,
-                                        fontSize: 11,
-                                      ),
+                                    Row(
+                                      children: [
+                                        Text(
+                                          _formatSize(file['size'] ?? 0),
+                                          style: const TextStyle(color: Colors.grey, fontSize: 11),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          "• ${_formatDate(file['modified'] ?? 0)}",
+                                          style: const TextStyle(color: Colors.grey, fontSize: 11),
+                                        ),
+                                      ],
                                     ),
                                   ],
                                 ],
@@ -797,8 +843,9 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                             Icon(
                               isDirectory ? Icons.chevron_right : Icons.more_vert,
                               color: Colors.grey,
-                              size: 20,),
-
+                              size: 20,
+                            ),
+                            // Quick Action Button
                             IconButton(
                               icon: Icon(
                                 isDirectory ? Icons.chevron_right : Icons.download,
@@ -818,6 +865,39 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                     );
                   },
                 ),
+    );
+  }
+
+  // Helper für Sortier-Items
+  PopupMenuItem<FileSortOption> _buildSortItem(FileSortOption option, String label, IconData icon) {
+    final isSelected = _currentSort == option;
+    return PopupMenuItem<FileSortOption>(
+      value: option,
+      child: Row(
+        children: [
+          Icon(
+            icon, 
+            color: isSelected ? const Color(0xFF00FF41) : Colors.grey,
+            size: 20,
+          ),
+          const SizedBox(width: 12),
+          Text(
+            label,
+            style: TextStyle(
+              color: isSelected ? const Color(0xFF00FF41) : Colors.white,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+          if (isSelected) ...[
+            const Spacer(),
+            Icon(
+              _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+              color: const Color(0xFF00FF41),
+              size: 16,
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
