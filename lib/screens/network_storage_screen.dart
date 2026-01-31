@@ -435,7 +435,9 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   bool _sortAscending = true;
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
-  List<dynamic> _originalFiles = []; // Backup für die Ordner-Ansicht
+  List<dynamic> _originalFiles = [];
+  bool _isMultiSelectMode = false;
+  final Set<String> _selectedPaths = {};
 
   @override
   void initState() {
@@ -757,6 +759,116 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     }
   }
 
+  // ✅ NEU: Auswahl umschalten
+  void _toggleSelection(String path) {
+    setState(() {
+      if (_selectedPaths.contains(path)) {
+        _selectedPaths.remove(path);
+        if (_selectedPaths.isEmpty) {
+          _isMultiSelectMode = false;
+        }
+      } else {
+        _selectedPaths.add(path);
+      }
+    });
+  }
+
+  // ✅ NEU: Alles auswählen / abwählen
+  void _toggleSelectAll() {
+    setState(() {
+      if (_selectedPaths.length == _files.length) {
+        _selectedPaths.clear();
+        _isMultiSelectMode = false;
+      } else {
+        _selectedPaths.clear();
+        for (var file in _files) {
+          _selectedPaths.add(file['path']);
+        }
+      }
+    });
+  }
+
+  // ✅ NEU: Modus beenden
+  void _exitMultiSelectMode() {
+    setState(() {
+      _isMultiSelectMode = false;
+      _selectedPaths.clear();
+    });
+  }
+
+  // ✅ NEU: Batch Download
+  void _downloadSelected() {
+    int count = 0;
+    for (var file in _files) {
+      if (_selectedPaths.contains(file['path']) && file['is_directory'] == false) {
+        _downloadFile(file); // Existierende Methode nutzen
+        count++;
+      }
+    }
+    _showSnack("⬇️ Started $count downloads");
+    _exitMultiSelectMode();
+  }
+
+  // ✅ NEU: Batch Delete
+  Future<void> _deleteSelected() async {
+    final count = _selectedPaths.length;
+    
+    // Sicherheitsabfrage
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Text("Delete $count items?", style: const TextStyle(color: Colors.white)),
+        content: const Text(
+          "This action cannot be undone.",
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text("Delete", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _loading = true);
+    
+    // Löschen
+    int successCount = 0;
+    final ip = widget.device['ip'];
+    final port = widget.device['file_server_port'];
+
+    // Wir erstellen eine Kopie der Liste, da wir während der Iteration UI updaten wollen
+    final pathsToDelete = List<String>.from(_selectedPaths);
+
+    for (var path in pathsToDelete) {
+      try {
+        final url = Uri.parse('http://$ip:$port/files/delete?path=${Uri.encodeComponent(path)}');
+        final response = await http.delete(url).timeout(const Duration(seconds: 5));
+        if (response.statusCode == 200) {
+          successCount++;
+        }
+      } catch (e) {
+        print("Failed to delete $path: $e");
+      }
+    }
+
+    _showSnack("🗑️ Deleted $successCount / $count items");
+    _exitMultiSelectMode();
+    
+    // Neu laden
+    if (_currentPath == "Root") _loadRootPaths();
+    else _loadPath(_currentPath);
+  }
+
   Widget _buildDetailRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -836,13 +948,21 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF050505),
+        backgroundColor: _isMultiSelectMode 
+            ? const Color(0xFF00FF41).withValues(alpha: 0.1) // Grüner Schimmer im Select Mode
+            : const Color(0xFF050505),
         elevation: 0,
+        
+        // LEADING: Back oder Close (X)
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          icon: Icon(
+            _isMultiSelectMode || _isSearching ? Icons.close : Icons.arrow_back,
+            color: Colors.white
+          ),
           onPressed: () {
-            // ✅ Logik für Back-Button angepasst
-            if (_isSearching) {
+            if (_isMultiSelectMode) {
+              _exitMultiSelectMode();
+            } else if (_isSearching) {
               _stopSearch();
             } else if (_pathHistory.isEmpty) {
               Navigator.pop(context);
@@ -853,7 +973,8 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
             }
           },
         ),
-        // ✅ Dynamischer Titel: Entweder Pfad oder Suchfeld
+
+        // TITLE: Suchfeld, Counter oder Pfad
         title: _isSearching
             ? TextField(
                 controller: _searchController,
@@ -866,38 +987,73 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                 ),
                 onSubmitted: _performSearch,
               )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(widget.device['name'] ?? 'Unknown', style: const TextStyle(fontSize: 14)),
-                  Text(_currentPath, style: const TextStyle(fontSize: 10, color: Colors.grey)),
-                ],
-              ),
+            : _isMultiSelectMode
+                ? Text(
+                    "${_selectedPaths.length} Selected",
+                    style: const TextStyle(color: Color(0xFF00FF41), fontWeight: FontWeight.bold),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(widget.device['name'] ?? 'Unknown', style: const TextStyle(fontSize: 14)),
+                      Text(_currentPath, style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                    ],
+                  ),
+
+        // ACTIONS: Menu, Select All, etc.
         actions: [
-          // ✅ Search Toggle Button
-          if (!_isSearching)
+          if (_isMultiSelectMode) ...[
+            // Select All Button
+            IconButton(
+              icon: Icon(
+                _selectedPaths.length == _files.length 
+                    ? Icons.library_add_check 
+                    : Icons.check_box_outline_blank,
+                color: Colors.white,
+              ),
+              tooltip: "Select All",
+              onPressed: _toggleSelectAll,
+            ),
+            // ✅ DAS 3-PUNKTE MENU FÜR MULTI-SELECT
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: Colors.white),
+              onSelected: (value) {
+                if (value == 'download') _downloadSelected();
+                if (value == 'delete') _deleteSelected();
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'download',
+                  child: Row(
+                    children: [
+                      Icon(Icons.download, color: Color(0xFF00FF41)),
+                      SizedBox(width: 12),
+                      Text("Download Selected"),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'delete',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete, color: Colors.red),
+                      SizedBox(width: 12),
+                      Text("Delete Selected", style: TextStyle(color: Colors.red)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ] else if (!_isSearching) ...[
+            // Normale Buttons (Suche, Sortierung)
             IconButton(
               icon: const Icon(Icons.search, color: Color(0xFF00FF41)),
-              onPressed: () {
-                setState(() {
-                  _isSearching = true;
-                  // Backup machen nicht nötig, da wir bei stopSearch eh neu laden
-                });
-              },
-            )
-          else
-            IconButton(
-              icon: const Icon(Icons.close, color: Colors.red),
-              onPressed: _stopSearch,
+              onPressed: () => setState(() => _isSearching = true),
             ),
-
-          // Sort Menu (nur anzeigen wenn nicht gesucht wird)
-          if (!_isSearching)
             PopupMenuButton<FileSortOption>(
-              // ... (Dein existierender Sort Code) ...
-              icon: const Icon(Icons.sort, color: Color(0xFF00FF41)),
+               // ... (Dein existierender Sort Code bleibt hier gleich) ...
+               icon: const Icon(Icons.sort, color: Color(0xFF00FF41)),
                onSelected: (FileSortOption result) {
-                 // ... dein bestehender Code ...
                  if (_currentSort == result) {
                     setState(() {
                       _sortAscending = !_sortAscending;
@@ -911,7 +1067,6 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                     });
                   }
                },
-               // ... item builder ...
                itemBuilder: (BuildContext context) => <PopupMenuEntry<FileSortOption>>[
                   _buildSortItem(FileSortOption.name, "Name", Icons.sort_by_alpha),
                   _buildSortItem(FileSortOption.date, "Date", Icons.access_time),
@@ -919,6 +1074,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                   _buildSortItem(FileSortOption.type, "Type", Icons.category),
                ],
             ),
+          ],
         ],
       ),
       
@@ -936,93 +1092,126 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                   padding: const EdgeInsets.all(8),
                   itemCount: _files.length,
                   itemBuilder: (context, index) {
-                    final file = _files[index];
-                    final isDirectory = file['is_directory'] ?? false;
-                    
-                    return GestureDetector(
-                      onTap: () => isDirectory ? _openItem(file) : _showFileDetails(file),
-                      onLongPress: () => _deleteItem(file), 
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF111111),
-                          border: Border(
-                            left: BorderSide(
-                              color: _getFileColor(file['type'] ?? 'file'),
-                              width: 3,
-                            ),
-                          ),
-                          borderRadius: const BorderRadius.only(
-                            topRight: Radius.circular(4),
-                            bottomRight: Radius.circular(4),
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              _getFileIcon(file['type'] ?? 'file'),
-                              color: _getFileColor(file['type'] ?? 'file'),
-                              size: 28,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    file['name'] ?? 'Unknown',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  if (!isDirectory) ...[
-                                    const SizedBox(height: 4),
-                                    Row(
-                                      children: [
-                                        Text(
-                                          _formatSize(file['size'] ?? 0),
-                                          style: const TextStyle(color: Colors.grey, fontSize: 11),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          "• ${_formatDate(file['modified'] ?? 0)}",
-                                          style: const TextStyle(color: Colors.grey, fontSize: 11),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                            Icon(
-                              isDirectory ? Icons.chevron_right : Icons.more_vert,
-                              color: Colors.grey,
-                              size: 20,
-                            ),
-                            // Quick Action Button
-                            IconButton(
-                              icon: Icon(
-                                isDirectory ? Icons.chevron_right : Icons.download,
-                                color: isDirectory ? Colors.grey : const Color(0xFF00FF41),
-                              ),
-                              onPressed: () {
-                                if (isDirectory) {
-                                  _openItem(file);
-                                } else {
-                                  _downloadFile(file);
-                                }
-                              },
-                            ),
-                          ],
+                final file = _files[index];
+                final isDirectory = file['is_directory'] ?? false;
+                final isSelected = _selectedPaths.contains(file['path']); // Check Status
+                
+                return GestureDetector(
+                  // ✅ LOGIK:
+                  // Normal: Tap -> Öffnen/Details, LongPress -> MultiSelect Start
+                  // MultiSelect: Tap -> Toggle Selection, LongPress -> Toggle Selection
+                  onTap: () {
+                    if (_isMultiSelectMode) {
+                      _toggleSelection(file['path']);
+                    } else {
+                      isDirectory ? _openItem(file) : _showFileDetails(file);
+                    }
+                  },
+                  onLongPress: () {
+                    if (!_isMultiSelectMode) {
+                      setState(() => _isMultiSelectMode = true);
+                    }
+                    _toggleSelection(file['path']);
+                  },
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      // ✅ Farbe ändert sich bei Auswahl
+                      color: isSelected 
+                          ? const Color(0xFF00FF41).withValues(alpha: 0.1) 
+                          : const Color(0xFF111111),
+                      border: Border(
+                        left: BorderSide(
+                          // ✅ Rand wird grün bei Auswahl
+                          color: isSelected 
+                              ? const Color(0xFF00FF41) 
+                              : _getFileColor(file['type'] ?? 'file'),
+                          width: 3,
                         ),
                       ),
-                    );
-                  },
+                      borderRadius: const BorderRadius.only(
+                        topRight: Radius.circular(4),
+                        bottomRight: Radius.circular(4),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        // ✅ Icon ändert sich zu Checkbox im Select Mode
+                        if (_isMultiSelectMode)
+                          Icon(
+                            isSelected ? Icons.check_box : Icons.check_box_outline_blank,
+                            color: isSelected ? const Color(0xFF00FF41) : Colors.grey,
+                            size: 28,
+                          )
+                        else
+                          Icon(
+                            _getFileIcon(file['type'] ?? 'file'),
+                            color: _getFileColor(file['type'] ?? 'file'),
+                            size: 28,
+                          ),
+                          
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                file['name'] ?? 'Unknown',
+                                style: TextStyle(
+                                  color: isSelected ? const Color(0xFF00FF41) : Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              if (!isDirectory) ...[
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    Text(
+                                      _formatSize(file['size'] ?? 0),
+                                      style: const TextStyle(color: Colors.grey, fontSize: 11),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      "• ${_formatDate(file['modified'] ?? 0)}",
+                                      style: const TextStyle(color: Colors.grey, fontSize: 11),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        
+                        // ✅ Buttons rechts ausblenden im MultiSelect Mode
+                        if (!_isMultiSelectMode) ...[
+                          Icon(
+                            isDirectory ? Icons.chevron_right : Icons.more_vert,
+                            color: Colors.grey,
+                            size: 20,
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              isDirectory ? Icons.chevron_right : Icons.download,
+                              color: isDirectory ? Colors.grey : const Color(0xFF00FF41),
+                            ),
+                            onPressed: () {
+                              if (isDirectory) {
+                                _openItem(file);
+                              } else {
+                                _downloadFile(file);
+                              }
+                            },
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
                 ),
     );
   }
