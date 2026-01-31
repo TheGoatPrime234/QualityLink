@@ -185,6 +185,8 @@ class FileServerService {
       await _handlePing(request);
     } else if (path == "/files/search") { // ✅ NEU: Search Endpoint
       await _handleSearchFiles(request);
+    } else if (path == "/files/delete") { // ✅ NEU: Delete Route
+      await _handleDeleteFile(request);
     } else {
       request.response.statusCode = 404;
       request.response.write(json.encode({"error": "Endpoint not found"}));
@@ -362,6 +364,61 @@ class FileServerService {
     } catch (e) {
       // Zugriff verweigert ignorieren
     }
+  }
+
+  // ✅ NEU: Datei oder Ordner löschen
+  static Future<void> _handleDeleteFile(HttpRequest request) async {
+    // Nur DELETE oder POST erlauben
+    if (request.method != 'DELETE' && request.method != 'POST') {
+       request.response.statusCode = 405; // Method Not Allowed
+       await request.response.close();
+       return;
+    }
+
+    final pathParam = request.uri.queryParameters['path'];
+    
+    if (pathParam == null || pathParam.isEmpty) {
+      request.response.statusCode = 400;
+      request.response.write(json.encode({"error": "Missing path parameter"}));
+      await request.response.close();
+      return;
+    }
+
+    // Sicherheitscheck: Darf dieser Pfad bearbeitet werden?
+    if (!_isPathAllowed(pathParam)) {
+      request.response.statusCode = 403;
+      request.response.write(json.encode({"error": "Access denied"}));
+      await request.response.close();
+      return;
+    }
+
+    final entity = FileSystemEntity.typeSync(pathParam);
+    
+    if (entity == FileSystemEntityType.notFound) {
+      request.response.statusCode = 404;
+      request.response.write(json.encode({"error": "Item not found"}));
+      await request.response.close();
+      return;
+    }
+
+    try {
+      if (entity == FileSystemEntityType.file) {
+        await File(pathParam).delete();
+        print("🗑️ Deleted file: $pathParam");
+      } else if (entity == FileSystemEntityType.directory) {
+        // Löscht Ordner rekursiv (Vorsicht!)
+        await Directory(pathParam).delete(recursive: true);
+        print("🗑️ Deleted folder: $pathParam");
+      }
+
+      request.response.statusCode = 200;
+      request.response.write(json.encode({"status": "deleted", "path": pathParam}));
+    } catch (e) {
+      print("❌ Delete error: $e");
+      request.response.statusCode = 500;
+      request.response.write(json.encode({"error": "Failed to delete: $e"}));
+    }
+    await request.response.close();
   }
 
   static Future<void> _handleDownload(HttpRequest request) async {

@@ -667,6 +667,17 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
           ],
         ),
         actions: [
+          // ✅ NEU: Delete Button (Rot)
+          TextButton.icon(
+            icon: const Icon(Icons.delete_outline, color: Colors.red),
+            label: const Text("Delete", style: TextStyle(color: Colors.red)),
+            onPressed: () {
+              Navigator.pop(context); // Dialog schließen
+              _deleteItem(file);      // Lösch-Dialog öffnen
+            },
+          ),
+          const Spacer(), // Schiebt Download & Close nach rechts
+          
           TextButton.icon(
              icon: const Icon(Icons.download, color: Color(0xFF00FF41)),
              label: const Text("Download", style: TextStyle(color: Color(0xFF00FF41))),
@@ -682,6 +693,68 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
         ],
       ),
     );
+  }
+
+  // ✅ NEU: Lösch-Funktion mit Sicherheitsabfrage
+  Future<void> _deleteItem(Map<String, dynamic> item) async {
+    final isFolder = item['is_directory'] == true;
+    final name = item['name'];
+
+    // 1. Bestätigungs-Dialog
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        title: Text("Delete $name?", style: const TextStyle(color: Colors.white)),
+        content: Text(
+          isFolder 
+              ? "Are you sure you want to delete this folder and all its contents?\nThis cannot be undone."
+              : "Are you sure you want to delete this file?\nThis cannot be undone.",
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text("Delete", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    // 2. Lösch-Request an Server
+    setState(() => _loading = true);
+    
+    try {
+      final ip = widget.device['ip'];
+      final port = widget.device['file_server_port'];
+      
+      // Request senden (DELETE Method)
+      final url = Uri.parse('http://$ip:$port/files/delete?path=${Uri.encodeComponent(item['path'])}');
+      final response = await http.delete(url).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        _showSnack("🗑️ Deleted $name");
+        
+        // Liste neu laden
+        if (_isSearching) {
+          _performSearch(_searchController.text);
+        } else {
+          _loadPath(_currentPath);
+        }
+      } else {
+        throw Exception("Server error ${response.statusCode}");
+      }
+    } catch (e) {
+      _showSnack("Failed to delete: $e", isError: true);
+      setState(() => _loading = false);
+    }
   }
 
   Widget _buildDetailRow(String label, String value) {
@@ -868,6 +941,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                     
                     return GestureDetector(
                       onTap: () => isDirectory ? _openItem(file) : _showFileDetails(file),
+                      onLongPress: () => _deleteItem(file), 
                       child: Container(
                         margin: const EdgeInsets.only(bottom: 8),
                         padding: const EdgeInsets.all(12),
