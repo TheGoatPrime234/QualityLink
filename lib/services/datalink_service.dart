@@ -46,6 +46,7 @@ class DataLinkService {
   final List<Function(String id, double progress, String? message)> _progressListeners = [];
   final List<Function(String message, bool isError)> _messageListeners = [];
   final List<Function(bool isProcessing)> _processingListeners = [];
+  final List<Function()> _historyClearedListeners = [];
   
   // === GETTERS ===
   bool get isRunning => _isRunning;
@@ -120,6 +121,23 @@ class DataLinkService {
   void setDownloadPath(String path) {
     _downloadPath = path;
     print("📂 Download path set: $path");
+  }
+
+  void addHistoryClearedListener(Function() listener) {
+    _historyClearedListeners.add(listener);
+  }
+
+  void clearTransferHistory() { // ✅ NEU
+    _transfers.clear();
+    _activeOperations.clear();
+    _processedTransferIds.clear();
+    
+    // UI benachrichtigen
+    for (var listener in _historyClearedListeners) {
+      try { listener(); } catch (_) {}
+    }
+    
+    print("🧹 Local transfer history cleared");
   }
 
   // =============================================================================

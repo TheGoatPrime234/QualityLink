@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../config/server_config.dart';
 import '../services/heartbeat_service.dart';
+import '../services/datalink_service.dart';
 
 // =============================================================================
 // SYSTEM MONITOR SCREEN - MODULE 2 (Enhanced with HeartbeatService Debug Info)
@@ -20,6 +21,7 @@ class SystemMonitorScreen extends StatefulWidget {
 class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
   // ✅ Heartbeat Service Access
   final HeartbeatService _heartbeatService = HeartbeatService();
+  final DataLinkService _datalink = DataLinkService();
   
   List<String> _logLines = ["Initializing Uplink..."];
   Timer? _logTimer;
@@ -177,8 +179,10 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
       final response = await http.post(Uri.parse('$serverBaseUrl/admin/clear_transfers'));
       if (response.statusCode == 200 && mounted) {
         final data = json.decode(response.body);
+        _datalink.clearTransferHistory();
+        
         _showSnackBar(
-          "✅ Deleted ${data['deleted_files']} files (${data['freed_mb']} MB freed)",
+          "✅ Deleted server files & cleared local history",
           isError: false,
         );
         _fetchStorageInfo();
@@ -200,9 +204,11 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
       final response = await http.post(Uri.parse('$serverBaseUrl/admin/clear_all'));
       if (response.statusCode == 200 && mounted) {
         final data = json.decode(response.body);
+        _datalink.clearTransferHistory();
+  
         setState(() => _logLines = ["System cleared."]);
         _showSnackBar(
-          "✅ Everything cleared! ${data['transfers']['freed_mb']} MB freed",
+         "✅ System completely wiped (Server & Local)",
           isError: false,
         );
         _fetchStorageInfo();

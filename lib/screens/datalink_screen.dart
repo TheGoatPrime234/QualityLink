@@ -179,6 +179,19 @@ Future<void> _initializeServices() async {
       }
     });
 
+    _datalink.addHistoryClearedListener(() {
+      if (mounted) {
+        setState(() {
+          _transfers.clear();
+          // Optional: Auch laufende Progress Bars resetten
+          _progressValue = 0.0;
+          _progressMessage = "";
+          _isProcessing = false;
+        });
+        _showSnack("🧹 Transfer history cleared");
+      }
+    });
+
     _datalink.addProcessingListener((isProcessing) {
       if (mounted) {
         setState(() => _isProcessing = isProcessing);
