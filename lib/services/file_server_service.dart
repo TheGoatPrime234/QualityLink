@@ -439,6 +439,7 @@ class FileServerService {
       
       final String? path = data['path'];
       final List<dynamic>? targetIds = data['targets']; // Liste von IDs
+      final String? destinationPath = data['destination_path'];
 
       if (path == null || targetIds == null || targetIds.isEmpty) {
         request.response.statusCode = 400;
@@ -463,11 +464,15 @@ class FileServerService {
       }
 
       // 🔥 Hier rufen wir den DataLink Service auf DIESEM (Remote) Gerät auf
+      // 🔥 Hier rufen wir den DataLink Service auf DIESEM (Remote) Gerät auf
       final ids = targetIds.map((e) => e.toString()).toList();
       
-      // Wir starten den Transfer "Fire & Forget" mäßig, damit der HTTP Request nicht blockiert
-      DataLinkService().sendFile(file, ids).then((_) {
-        print("✅ Remote share started for $path");
+      DataLinkService().sendFile(
+        file, 
+        ids, 
+        destinationPath: destinationPath // ✅ WICHTIG: Pfad weitergeben!
+      ).then((_) {
+        print("✅ Remote share started for $path to $destinationPath");
       }).catchError((e) {
         print("❌ Remote share failed: $e");
       });

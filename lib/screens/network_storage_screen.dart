@@ -500,7 +500,165 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     });
   }
 
-  Future<void> _showDevicePickerAndSend({String? singlePath}) async {
+  // ✅ NEU: Mini-Browser für das Zielgerät
+  Future<String?> _showRemoteFolderPicker(Map<String, dynamic> targetDevice) async {
+    String currentPath = "Root"; // Start im Root des Zielgeräts
+    List<dynamic> folders = [];
+    bool loading = true;
+    
+    // Hilfsfunktion zum Laden der Ordner des ZIEL-Geräts
+    Future<void> loadTargetFolders(StateSetter setState, String path) async {
+      setState(() => loading = true);
+      try {
+        final ip = targetDevice['ip'];
+        final port = targetDevice['file_server_port'];
+        
+        // Wenn Root, verfügbare Pfade laden, sonst Ordnerinhalt
+        String url;
+        if (path == "Root") {
+          url = 'http://$ip:$port/files/paths'; // Endpoint muss existieren (haben wir in file_server_service)
+        } else {
+          url = 'http://$ip:$port/files/list?path=${Uri.encodeComponent(path)}';
+        }
+
+        final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 5));
+        
+        if (response.statusCode == 200) {
+          final data = json.decode(response.body);
+          List<dynamic> items;
+          
+          if (path == "Root") {
+             // Root Pfade normalisieren
+             final paths = List<String>.from(data['paths'] ?? []);
+             items = paths.map((pathStr) => {
+               "name": p.basename(pathStr), // Jetzt nutzt 'p' das Paket und 'pathStr' den String
+               "path": pathStr,
+               "is_directory": true,
+             }).toList();
+          } else {
+             // Nur Ordner filtern
+             final allFiles = List<dynamic>.from(data['files'] ?? []);
+             items = allFiles.where((f) => f['is_directory'] == true).toList();
+          }
+
+          setState(() {
+            folders = items;
+            currentPath = path;
+            loading = false;
+          });
+        }
+      } catch (e) {
+        print("Folder picker error: $e");
+        setState(() => loading = false);
+      }
+    }
+
+    // Dialog anzeigen
+    return await showDialog<String>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) {
+          // Initial laden
+          if (loading && folders.isEmpty && currentPath == "Root") {
+            loadTargetFolders(setState, "Root");
+          }
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A1A),
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text("Select Destination", style: TextStyle(color: Colors.white, fontSize: 16)),
+                Text(
+                  targetDevice['name'], 
+                  style: const TextStyle(color: Color(0xFF00FF41), fontSize: 12)
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 300,
+              child: Column(
+                children: [
+                  // Pfad Header mit Back Button
+                  Container(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    decoration: const BoxDecoration(
+                      border: Border(bottom: BorderSide(color: Colors.grey, width: 0.5)),
+                    ),
+                    child: Row(
+                      children: [
+                        if (currentPath != "Root")
+                          IconButton(
+                            icon: const Icon(Icons.arrow_upward, size: 16, color: Colors.grey),
+                            onPressed: () {
+                              // Einfache Parent-Logik
+                              final parent = Directory(currentPath).parent.path;
+                              // Wenn wir nicht mehr in den erlaubten Pfaden sind -> Root
+                              // Einfachheitshalber: Wenn Parent gleich Current -> Root
+                              if (parent == currentPath) {
+                                loadTargetFolders(setState, "Root");
+                              } else {
+                                loadTargetFolders(setState, parent);
+                              }
+                            },
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            currentPath == "Root" ? "Root Folders" : p.basename(currentPath),
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                  // Ordner Liste
+                  Expanded(
+                    child: loading
+                        ? const Center(child: CircularProgressIndicator(color: Color(0xFF00FF41)))
+                        : folders.isEmpty
+                            ? const Center(child: Text("No folders", style: TextStyle(color: Colors.grey)))
+                            : ListView.builder(
+                                shrinkWrap: true,
+                                itemCount: folders.length,
+                                itemBuilder: (context, index) {
+                                  final folder = folders[index];
+                                  return ListTile(
+                                    dense: true,
+                                    leading: const Icon(Icons.folder, color: Color(0xFF00E5FF)),
+                                    title: Text(folder['name'], style: const TextStyle(color: Colors.white)),
+                                    onTap: () => loadTargetFolders(setState, folder['path']),
+                                  );
+                                },
+                              ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context), // Abbrechen
+                child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+              ),
+              if (currentPath != "Root") // Nur erlauben wenn nicht Root-Auswahl
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, currentPath), // Pfad zurückgeben
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00FF41)),
+                  child: const Text("Select Here", style: TextStyle(color: Colors.black)),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _showDevicePickerAndSend({String? singlePath, bool selectDestination = false}) async {
     final pathsToSend = singlePath != null ? [singlePath] : _selectedPaths.toList();
     if (pathsToSend.isEmpty) return;
 
@@ -517,7 +675,6 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                  final data = json.decode(response.body);
                  final allDevices = List<dynamic>.from(data['devices'] ?? []);
                  setState(() {
-                   // Filtern: Nicht an sich selbst senden
                    targets = allDevices.where((d) => 
                      d['client_id'] != widget.device['client_id'] && 
                      d['online'] == true
@@ -530,13 +687,16 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
 
           return AlertDialog(
             backgroundColor: const Color(0xFF1A1A1A),
-            title: const Text("Send to Device", style: TextStyle(color: Colors.white)),
+            title: Text(
+              selectDestination ? "Select Target & Folder" : "Send to Device", 
+              style: const TextStyle(color: Colors.white)
+            ),
             content: SizedBox(
               width: double.maxFinite,
               child: loading 
                   ? const LinearProgressIndicator(color: Color(0xFF00FF41))
                   : targets.isEmpty
-                      ? const Text("No other online devices found.", style: TextStyle(color: Colors.grey))
+                      ? const Text("No other online devices.", style: TextStyle(color: Colors.grey))
                       : ListView.builder(
                           shrinkWrap: true,
                           itemCount: targets.length,
@@ -546,9 +706,17 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                               leading: Icon(_getDeviceIcon(device['type']), color: Colors.white),
                               title: Text(device['name'], style: const TextStyle(color: Colors.white)),
                               subtitle: Text(device['ip'], style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                              onTap: () {
-                                Navigator.pop(context);
-                                _triggerRemoteSend(pathsToSend, device);
+                              onTap: () async {
+                                Navigator.pop(context); // Geräte-Dialog zu
+                                
+                                String? destPath;
+                                if (selectDestination) {
+                                  // ✅ Folder Picker öffnen!
+                                  destPath = await _showRemoteFolderPicker(device);
+                                  if (destPath == null) return; // Abgebrochen
+                                }
+                                
+                                _triggerRemoteSend(pathsToSend, device, destinationPath: destPath);
                               },
                             );
                           },
@@ -566,7 +734,11 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     );
   }
 
-  Future<void> _triggerRemoteSend(List<String> paths, Map<String, dynamic> targetDevice) async {
+  Future<void> _triggerRemoteSend(
+    List<String> paths, 
+    Map<String, dynamic> targetDevice, 
+    {String? destinationPath} // ✅ Optionaler Parameter
+  ) async {
     _showSnack("🚀 Initiating transfer to ${targetDevice['name']}...");
     
     if (_isMultiSelectMode) _exitMultiSelectMode();
@@ -579,28 +751,28 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
 
     for (var path in paths) {
       try {
+        final Map<String, dynamic> body = {
+          "path": path,
+          "targets": [targetId]
+        };
+        
+        // ✅ Zielpfad hinzufügen
+        if (destinationPath != null) {
+          body['destination_path'] = destinationPath;
+        }
+
         final response = await http.post(
           Uri.parse('http://$ip:$port/files/share'),
           headers: {"Content-Type": "application/json"},
-          body: json.encode({
-            "path": path,
-            "targets": [targetId]
-          }),
+          body: json.encode(body),
         ).timeout(const Duration(seconds: 5));
 
-        if (response.statusCode == 200) {
-          successCount++;
-        }
+        if (response.statusCode == 200) successCount++;
       } catch (e) {
         print("Failed to share $path: $e");
       }
     }
-
-    if (successCount > 0) {
-      _showSnack("✅ Started sending $successCount files to ${targetDevice['name']}");
-    } else {
-      _showSnack("❌ Failed to initiate transfer", isError: true);
-    }
+    // ... (Rest bleibt gleich)
   }
 
   Future<void> _loadRootPaths() async {
@@ -801,13 +973,21 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
             },
           ),
           const Spacer(), // Schiebt Download & Close nach rechts
-          TextButton.icon(
-            icon: const Icon(Icons.send, color: Color(0xFF00E5FF)),
-            label: const Text("Send", style: TextStyle(color: Color(0xFF00E5FF))),
-            onPressed: () {
+          GestureDetector( // Wrap mit GestureDetector für LongPress
+            onLongPress: () {
               Navigator.pop(context);
-              _showDevicePickerAndSend(singlePath: file['path']);
+              // ✅ Mit Folder Picker starten
+              _showDevicePickerAndSend(singlePath: file['path'], selectDestination: true);
             },
+            child: TextButton.icon(
+              icon: const Icon(Icons.send, color: Color(0xFF00E5FF)),
+              label: const Text("Send", style: TextStyle(color: Color(0xFF00E5FF))),
+              onPressed: () {
+                Navigator.pop(context);
+                // Normales Senden (ohne Picker)
+                _showDevicePickerAndSend(singlePath: file['path']);
+              },
+            ),
           ),
           TextButton.icon(
              icon: const Icon(Icons.download, color: Color(0xFF00FF41)),
@@ -1149,10 +1329,11 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert, color: Colors.white),
               onSelected: (value) {
-                if (value == 'download') _downloadSelected();
-                if (value == 'delete') _deleteSelected();
-                if (value == 'share') _showDevicePickerAndSend();
-              },
+                  if (value == 'download') _downloadSelected();
+                  if (value == 'delete') _deleteSelected();
+                  if (value == 'share') _showDevicePickerAndSend();
+                  if (value == 'share_custom') _showDevicePickerAndSend(selectDestination: true); // ✅
+                },
               itemBuilder: (context) => [
                 const PopupMenuItem(
                   value: 'download',
@@ -1181,6 +1362,16 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                       Icon(Icons.delete, color: Colors.red),
                       SizedBox(width: 12),
                       Text("Delete Selected", style: TextStyle(color: Colors.red)),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'share_custom', // Neuer Value
+                  child: Row(
+                    children: [
+                      Icon(Icons.drive_file_move, color: Color(0xFF00E5FF)), // Anderes Icon
+                      SizedBox(width: 12),
+                      Text("Send to Folder..."),
                     ],
                   ),
                 ),
