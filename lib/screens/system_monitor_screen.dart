@@ -841,6 +841,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
 
   bool _shouldShowInNormalMode(String line) {
     if (line.contains("[CLEANUP]")) return false;
+    if (line.contains("[STORAGE]")) return false;
     if (line.contains("uvicorn")) return false;
     if (line.contains("Get all clipboard")) return false;
     return true;

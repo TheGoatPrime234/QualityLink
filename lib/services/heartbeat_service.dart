@@ -17,6 +17,9 @@ class HeartbeatService {
   bool _isConnected = false;
   String _localIp = "0.0.0.0";
   
+  // ✅ NEU: Timestamp für Smart-Updates
+  DateTime? _lastStorageRegistration;
+  
   String? _clientId;
   String? _deviceName;
   int? _fileServerPort;
@@ -34,7 +37,7 @@ class HeartbeatService {
   bool get isConnected => _isConnected;
   String get localIp => _localIp;
 
-Future<void> start({
+  Future<void> start({
     required String clientId,
     required String deviceName,
     int? fileServerPort,
@@ -44,6 +47,9 @@ Future<void> start({
     _clientId = clientId;
     _deviceName = deviceName;
     _fileServerPort = fileServerPort;
+    
+    // Reset Timer beim Start
+    _lastStorageRegistration = null;
 
     await _detectLocalIp();
     await _sendHeartbeat();
@@ -74,6 +80,8 @@ Future<void> start({
   void resume() {
     if (!_isRunning) return;
     _heartbeatTimer?.cancel();
+    // Sofort senden beim Aufwachen
+    _lastStorageRegistration = null; 
     _heartbeatTimer = Timer.periodic(heartbeatInterval, (timer) {
       _sendHeartbeat();
     });
@@ -82,10 +90,17 @@ Future<void> start({
 
   Future<void> updateFileServerPort(int port) async {
     _fileServerPort = port;
+    // Port geändert -> Sofort alles neu registrieren
+    _lastStorageRegistration = null;
     await _sendHeartbeat();
   }
+  
+  // ✅ NEU: Kann von außen gerufen werden, wenn sich Ordner ändern
+  void triggerStorageUpdate() {
+    _lastStorageRegistration = null;
+  }
 
-void addConnectionListener(Function(bool isConnected) listener) {
+  void addConnectionListener(Function(bool isConnected) listener) {
     _connectionListeners.add(listener);
   }
 
@@ -137,7 +152,7 @@ void addConnectionListener(Function(bool isConnected) listener) {
     }
   }
 
-Future<void> _sendHeartbeat() async {
+  Future<void> _sendHeartbeat() async {
     if (_clientId == null || _deviceName == null) return;
 
     if (_fileServerPort == null) {
@@ -169,8 +184,10 @@ Future<void> _sendHeartbeat() async {
         if (response.statusCode == 200) {
           success = true;
           
+          bool justReconnected = false;
           if (!_isConnected) {
             _isConnected = true;
+            justReconnected = true; // Wir kommen gerade frisch online
             _notifyConnectionListeners(true);
           }
 
@@ -180,7 +197,20 @@ Future<void> _sendHeartbeat() async {
             _notifyPeerListeners(peers);
           } catch (e) {}
 
-          await _registerStorage();
+          // ✅ OPTIMIERUNG: Storage Registration drosseln
+          // Wir senden nur, wenn:
+          // 1. Wir uns gerade frisch verbunden haben (Server könnte restartet sein)
+          // 2. ODER: Das letzte Update länger als 60 Sekunden her ist (Refresh)
+          // 3. ODER: Ein manuelles Update angefordert wurde (_lastStorageRegistration == null)
+          
+          final now = DateTime.now();
+          if (justReconnected || 
+              _lastStorageRegistration == null || 
+              now.difference(_lastStorageRegistration!) > const Duration(seconds: 60)) {
+            
+            await _registerStorage();
+            _lastStorageRegistration = now; // Zeitstempel merken
+          }
           
         } else {
           throw Exception("Server error");
@@ -202,7 +232,7 @@ Future<void> _sendHeartbeat() async {
     }
   }
 
-Future<void> _sendDisconnectHeartbeat() async {
+  Future<void> _sendDisconnectHeartbeat() async {
     if (_clientId == null) return;
 
     try {
@@ -224,6 +254,8 @@ Future<void> _sendDisconnectHeartbeat() async {
       final availablePaths = FileServerService.availablePaths;
       if (availablePaths.isEmpty) return;
       
+      // print("📤 Registering storage paths (${availablePaths.length})..."); // Debug
+      
       await http.post(
         Uri.parse('$serverBaseUrl/storage/register'),
         headers: {"Content-Type": "application/json"},
@@ -232,7 +264,10 @@ Future<void> _sendDisconnectHeartbeat() async {
           "available_paths": availablePaths,
         }),
       ).timeout(const Duration(seconds: 5));
-    } catch (e) {}
+    } catch (e) {
+      // Bei Fehler setzen wir den Timer zurück, damit wir es beim nächsten Heartbeat sofort nochmal versuchen
+      _lastStorageRegistration = null;
+    }
   }
 
   void _notifyConnectionListeners(bool isConnected) {
@@ -260,6 +295,7 @@ Future<void> _sendDisconnectHeartbeat() async {
   }
 
   Future<void> forceHeartbeat() async {
+    _lastStorageRegistration = null; // Erzwingt auch Storage Update
     await _sendHeartbeat();
   }
 

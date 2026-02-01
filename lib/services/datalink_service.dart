@@ -6,16 +6,17 @@ import 'dart:math';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:archive/archive_io.dart';
+import 'package:web_socket_channel/web_socket_channel.dart'; // ✅ NEU
 
 import '../config/server_config.dart';
 import '../models/transfer_models.dart';
 
 // =============================================================================
-// DATALINK SERVICE - TEIL 1: CORE & STATE MANAGEMENT
+// DATALINK SERVICE v3 (Realtime WebSockets)
 // =============================================================================
 
 /// Zentraler Service für File Transfer Management
-/// Verwaltet P2P und Relay-Transfers, unabhängig von UI
+/// Verwaltet P2P und Relay-Transfers via WebSocket Push & HTTP Fallback
 class DataLinkService {
   // Singleton Pattern
   static final DataLinkService _instance = DataLinkService._internal();
@@ -27,10 +28,14 @@ class DataLinkService {
   bool _isProcessing = false;
   String _clientId = "";
   String _myLocalIp = "0.0.0.0";
-  String _downloadPath = "";  // ✅ NEU: Für event-driven downloads
+  String _downloadPath = "";
   
   HttpServer? _localServer;
   Timer? _syncTimer;
+  
+  // ✅ NEU: WebSocket State
+  WebSocketChannel? _wsChannel;
+  bool _isWsConnected = false;
   
   final List<Transfer> _transfers = [];
   final Map<String, String> _activeOperations = {}; // transferId -> localFilePath
@@ -46,42 +51,41 @@ class DataLinkService {
   bool get isRunning => _isRunning;
   bool get isProcessing => _isProcessing;
   String get myLocalIp => _myLocalIp;
+  bool get isRealtimeConnected => _isWsConnected; // ✅ Für UI Status
+  
   List<Transfer> get allTransfers => List.unmodifiable(_transfers);
-  List<Transfer> get activeTransfers => 
-      _transfers.where((t) => t.isActive).toList();
-  List<Transfer> get completedTransfers => 
-      _transfers.where((t) => t.isCompleted).toList();
+  List<Transfer> get activeTransfers => _transfers.where((t) => t.isActive).toList();
+  List<Transfer> get completedTransfers => _transfers.where((t) => t.isCompleted).toList();
+  int get localServerPort => _localServer?.port ?? 0;
 
   // =============================================================================
   // LIFECYCLE
   // =============================================================================
 
-  /// Startet den DataLink Service
   Future<void> start({
     required String clientId,
     required String localIp,
   }) async {
-    if (_isRunning) {
-      print("⚠️ DataLinkService already running");
-      return;
-    }
+    if (_isRunning) return;
 
     _clientId = clientId;
     _myLocalIp = localIp;
 
-    print("🚀 Starting DataLinkService for client: $_clientId");
+    print("🚀 Starting DataLinkService v3 (Realtime) for: $_clientId");
 
-    // Local P2P Server starten
+    // 1. Local P2P Server starten
     await _startLocalServer();
 
-    // Sync Loop starten
+    // 2. ✅ WebSocket verbinden (Instant Push)
+    _connectWebSocket();
+
+    // 3. Fallback Sync Loop starten
     _startSyncLoop();
 
     _isRunning = true;
-    print("✅ DataLinkService started successfully");
+    print("✅ DataLinkService started");
   }
 
-  /// Stoppt den Service
   Future<void> stop() async {
     if (!_isRunning) return;
 
@@ -89,53 +93,130 @@ class DataLinkService {
 
     _syncTimer?.cancel();
     _syncTimer = null;
+    
+    // ✅ WebSocket schließen
+    _wsChannel?.sink.close();
+    _wsChannel = null;
+    _isWsConnected = false;
 
     await _localServer?.close();
     _localServer = null;
 
     _isRunning = false;
-    print("✅ DataLinkService stopped");
   }
 
-  /// Pausiert den Service (z.B. bei App-Minimize)
   void pause() {
     if (!_isRunning) return;
     _syncTimer?.cancel();
-    print("⏸️ DataLinkService paused");
+    // WebSocket lassen wir offen, oder schließen ihn um Akku zu sparen (hier lassen wir ihn offen)
   }
 
-  /// Setzt den Service fort
   void resume() {
     if (!_isRunning) return;
     _startSyncLoop();
-    print("▶️ DataLinkService resumed");
+    if (!_isWsConnected) _connectWebSocket();
   }
 
-  /// Setzt den Download-Pfad für automatische Downloads
   void setDownloadPath(String path) {
     _downloadPath = path;
     print("📂 Download path set: $path");
   }
 
   // =============================================================================
+  // WEBSOCKET LOGIC (🔥 NEU in v3)
+  // =============================================================================
+
+  void _connectWebSocket() {
+    if (_wsChannel != null) return;
+
+    try {
+      // serverWsUrl muss in server_config.dart definiert sein (ws://...)
+      final url = Uri.parse('$serverWsUrl/$_clientId');
+      print("🔌 Connecting to WebSocket: $url");
+      
+      _wsChannel = WebSocketChannel.connect(url);
+      _isWsConnected = true;
+
+      _wsChannel!.stream.listen(
+        (message) {
+          _handleWebSocketMessage(message);
+        },
+        onError: (error) {
+          print("⚠️ WebSocket Error: $error");
+          _isWsConnected = false;
+          _scheduleReconnect();
+        },
+        onDone: () {
+          print("🔌 WebSocket Disconnected");
+          _isWsConnected = false;
+          _scheduleReconnect();
+        },
+      );
+    } catch (e) {
+      print("❌ WebSocket Init Failed: $e");
+      _scheduleReconnect();
+    }
+  }
+
+  void _scheduleReconnect() {
+    if (!_isRunning) return;
+    _wsChannel = null;
+    // Versuche Reconnect in 5 Sekunden
+    Future.delayed(const Duration(seconds: 5), () {
+      if (_isRunning && !_isWsConnected) {
+        print("🔄 Reconnecting WebSocket...");
+        _connectWebSocket();
+      }
+    });
+  }
+
+  void _handleWebSocketMessage(String message) {
+    try {
+      final data = json.decode(message);
+      final event = data['event'];
+
+      if (event == 'transfer_offer') {
+        // 🔥 INSTANT DOWNLOAD TRIGGER!
+        print("🚀 INSTANT OFFER RECEIVED via WebSocket!");
+        final transferData = data['transfer'];
+        _handleInstantOffer(transferData);
+      } 
+    } catch (e) {
+      print("⚠️ WS Message Parse Error: $e");
+    }
+  }
+
+  void _handleInstantOffer(Map<String, dynamic> transferMeta) {
+    try {
+      // Transfer Objekt aus Metadaten bauen
+      final transfer = Transfer.fromServerResponse({
+        'meta': transferMeta,
+        'status': 'OFFERED',
+        'timestamp': DateTime.now().millisecondsSinceEpoch
+      });
+
+      if (!_transfers.any((t) => t.id == transfer.id)) {
+        _transfers.add(transfer);
+        _notifyTransferUpdate(transfer);
+        
+        // Sofort Download starten!
+        if (_downloadPath.isNotEmpty) {
+          _handleOfferedTransfer(transfer, _downloadPath);
+        }
+      }
+    } catch (e) {
+      print("❌ Failed to handle instant offer: $e");
+    }
+  }
+
+  // =============================================================================
   // LISTENER MANAGEMENT
   // =============================================================================
 
-  void addTransferListener(Function(Transfer) listener) {
-    _transferListeners.add(listener);
-  }
-
-  void addProgressListener(Function(String id, double progress, String? message) listener) {
-    _progressListeners.add(listener);
-  }
-
-  void addMessageListener(Function(String message, bool isError) listener) {
-    _messageListeners.add(listener);
-  }
-
-  void addProcessingListener(Function(bool isProcessing) listener) {
-    _processingListeners.add(listener);
-  }
+  void addTransferListener(Function(Transfer) listener) => _transferListeners.add(listener);
+  void addProgressListener(Function(String, double, String?) listener) => _progressListeners.add(listener);
+  void addMessageListener(Function(String, bool) listener) => _messageListeners.add(listener);
+  void addProcessingListener(Function(bool) listener) => _processingListeners.add(listener);
 
   void removeAllListeners() {
     _transferListeners.clear();
@@ -144,145 +225,28 @@ class DataLinkService {
     _processingListeners.clear();
   }
 
-  // === PRIVATE NOTIFIERS ===
-
   void _notifyTransferUpdate(Transfer transfer) {
-    for (var listener in _transferListeners) {
-      try {
-        listener(transfer);
-      } catch (e) {
-        print("⚠️ Error in transfer listener: $e");
-      }
-    }
+    for (var l in _transferListeners) try { l(transfer); } catch (_) {}
   }
-
-  void _notifyProgress(String id, double progress, [String? message]) {
-    for (var listener in _progressListeners) {
-      try {
-        listener(id, progress, message);
-      } catch (e) {
-        print("⚠️ Error in progress listener: $e");
-      }
-    }
+  void _notifyProgress(String id, double p, [String? m]) {
+    for (var l in _progressListeners) try { l(id, p, m); } catch (_) {}
   }
-
-  void _notifyMessage(String message, {bool isError = false}) {
-    for (var listener in _messageListeners) {
-      try {
-        listener(message, isError);
-      } catch (e) {
-        print("⚠️ Error in message listener: $e");
-      }
-    }
+  void _notifyMessage(String m, {bool isError = false}) {
+    for (var l in _messageListeners) try { l(m, isError); } catch (_) {}
   }
-
   void _notifyProcessingState(bool isProcessing) {
     _isProcessing = isProcessing;
-    for (var listener in _processingListeners) {
-      try {
-        listener(isProcessing);
-      } catch (e) {
-        print("⚠️ Error in processing listener: $e");
-      }
-    }
+    for (var l in _processingListeners) try { l(isProcessing); } catch (_) {}
   }
 
   // =============================================================================
-  // LOCAL P2P SERVER
-  // =============================================================================
-
-  Future<void> _startLocalServer() async {
-    try {
-      // Server auf zufälligem Port starten
-      _localServer = await HttpServer.bind(InternetAddress.anyIPv4, 0);
-      
-      print("🌐 Local P2P server started on port ${_localServer!.port}");
-
-      _localServer!.listen((request) async {
-        await _handleP2PRequest(request);
-      });
-    } catch (e) {
-      print("❌ Failed to start local server: $e");
-      _notifyMessage("Failed to start P2P server: $e", isError: true);
-    }
-  }
-
-  Future<void> _handleP2PRequest(HttpRequest request) async {
-    final path = request.uri.path;
-    
-    // Download Request: /download/{encoded_file_path}
-    if (path.startsWith("/download/")) {
-      final filePath = Uri.decodeComponent(path.replaceAll("/download/", ""));
-      final file = File(filePath);
-      
-      if (!file.existsSync()) {
-        request.response.statusCode = 404;
-        request.response.write("File not found");
-        await request.response.close();
-        return;
-      }
-
-      try {
-        // Headers setzen
-        final totalBytes = file.lengthSync();
-        request.response.headers.add("Connection", "keep-alive");
-        request.response.headers.add("Content-Type", "application/octet-stream");
-        request.response.headers.add("Content-Length", totalBytes);
-        request.response.headers.add(
-          "Content-Disposition",
-          'attachment; filename="${p.basename(filePath)}"',
-        );
-
-        // ✅ Processing State setzen für Upload
-        _notifyProcessingState(true);
-        _notifyProgress(filePath, 0.0, "Sending via P2P...");
-
-        // File streamen mit Progress
-        int sentBytes = 0;
-        
-        await for (var chunk in file.openRead()) {
-          request.response.add(chunk);
-          sentBytes += chunk.length;
-          
-          // ✅ Progress alle 512KB oder bei Completion
-          if (sentBytes % (512 * 1024) == 0 || sentBytes == totalBytes) {
-            _notifyProgress(
-              filePath,
-              sentBytes / totalBytes,
-              "${_formatBytes(sentBytes)} / ${_formatBytes(totalBytes)} sent",
-            );
-          }
-        }
-
-        await request.response.close();
-        
-        // ✅ Final Progress
-        _notifyProgress(filePath, 1.0, "P2P upload complete!");
-        print("✅ P2P upload completed: ${p.basename(filePath)}");
-        
-        // ✅ Processing State zurücksetzen
-        _notifyProcessingState(false);
-        
-      } catch (e) {
-        print("❌ P2P upload error: $e");
-        request.response.statusCode = 500;
-        await request.response.close();
-        _notifyProcessingState(false);
-      }
-    } else {
-      request.response.statusCode = 404;
-      await request.response.close();
-    }
-  }
-
-  // =============================================================================
-  // SYNC LOOP
+  // SYNC LOOP (FALLBACK)
   // =============================================================================
 
   void _startSyncLoop() {
     _syncTimer?.cancel();
-    // ✅ Intervall auf 5s erhöht da Downloads jetzt event-driven sind
-    _syncTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+    // ✅ Langsameres Intervall (10s), da WebSocket primär ist
+    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       _syncTransfers();
       _monitorSenderTasks();
     });
@@ -298,143 +262,112 @@ class DataLinkService {
         final data = json.decode(response.body);
         final List<dynamic> transferList = data['transfers'] ?? [];
         
-        // Update local transfer list
         for (var transferData in transferList) {
           final transfer = Transfer.fromServerResponse(transferData);
-          
-          // Check ob das ein NEUER Transfer ist
           final existingIndex = _transfers.indexWhere((t) => t.id == transfer.id);
-          final isNew = existingIndex == -1;
           
           if (existingIndex != -1) {
-            // Bestehender Transfer - prüfe auf Status-Änderung
             final oldTransfer = _transfers[existingIndex];
-_transfers[existingIndex] = transfer;
+            if (oldTransfer.status != transfer.status) {
+               _transfers[existingIndex] = transfer;
+               _notifyTransferUpdate(transfer);
+            }
             
-            // ✅ Bei Status-Änderung zu RELAY_READY → Download starten
+            // Relay Ready Check (falls WS versagt hat)
             if (oldTransfer.status != TransferStatus.relayReady && 
                 transfer.status == TransferStatus.relayReady &&
                 !_processedTransferIds.contains(transfer.id) &&
                 _downloadPath.isNotEmpty) {
-              print("🚀 Status changed to relay ready - downloading immediately!");
               _handleRelayReadyTransfer(transfer, _downloadPath);
             }
           } else {
-            // Neuer Transfer
+            // Neuer Transfer (WS verpasst?)
             _transfers.add(transfer);
             _notifyTransferUpdate(transfer);
             
-            // ✅ SOFORT Download starten wenn Path gesetzt ist!
             if (_downloadPath.isNotEmpty && !_processedTransferIds.contains(transfer.id)) {
               if (transfer.status == TransferStatus.offered) {
-                print("🚀 New transfer detected - starting download immediately!");
+                print("⚠️ Polling picked up offer (WebSocket missed it?)");
                 _handleOfferedTransfer(transfer, _downloadPath);
-              } else if (transfer.status == TransferStatus.relayReady) {
-                print("🚀 Relay ready transfer detected - downloading immediately!");
-                _handleRelayReadyTransfer(transfer, _downloadPath);
               }
             }
           }
         }
       }
+    } catch (e) { /* silent */ }
+  }
+
+  // =============================================================================
+  // LOCAL SERVER & P2P
+  // =============================================================================
+
+  Future<void> _startLocalServer() async {
+    try {
+      _localServer = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+      print("🌐 Local P2P server started on port ${_localServer!.port}");
+      _localServer!.listen((request) async => await _handleP2PRequest(request));
     } catch (e) {
-      print("⚠️ Sync transfers error: $e");
+      print("❌ Failed to start local server: $e");
     }
   }
 
-  Future<void> _monitorSenderTasks() async {
-    for (var transferId in _activeOperations.keys.toList()) {
-      try {
-        final response = await http.get(
-          Uri.parse('$serverBaseUrl/transfer/status/$transferId'),
-        ).timeout(const Duration(seconds: 5));
+  Future<void> _handleP2PRequest(HttpRequest request) async {
+    final path = request.uri.path;
+    if (path.startsWith("/download/")) {
+      final filePath = Uri.decodeComponent(path.replaceAll("/download/", ""));
+      final file = File(filePath);
+      
+      if (!file.existsSync()) {
+        request.response.statusCode = 404;
+        await request.response.close();
+        return;
+      }
 
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          final status = data['status'] as String;
-          
-          // Wenn Relay angefordert wurde, uploade zum Server
-          if (status == "RELAY_REQUESTED" && !_isProcessing) {
-            final filePath = _activeOperations[transferId]!;
-            await _uploadToRelay(filePath, transferId);
+      try {
+        final totalBytes = file.lengthSync();
+        request.response.headers.add("Content-Type", "application/octet-stream");
+        request.response.headers.add("Content-Length", totalBytes);
+        request.response.headers.add("Content-Disposition", 'attachment; filename="${p.basename(filePath)}"');
+
+        _notifyProcessingState(true);
+        _notifyProgress(filePath, 0.0, "Sending via P2P...");
+
+        int sentBytes = 0;
+        await for (var chunk in file.openRead()) {
+          request.response.add(chunk);
+          sentBytes += chunk.length;
+          if (sentBytes % (512 * 1024) == 0 || sentBytes == totalBytes) {
+            _notifyProgress(filePath, sentBytes / totalBytes, "Sending...");
           }
         }
+        await request.response.close();
+        _notifyProgress(filePath, 1.0, "Complete!");
+        _notifyProcessingState(false);
       } catch (e) {
-        // Ignore errors in monitoring
+        request.response.statusCode = 500;
+        await request.response.close();
+        _notifyProcessingState(false);
       }
+    } else {
+      request.response.statusCode = 404;
+      await request.response.close();
     }
   }
 
   // =============================================================================
-  // SERVER COMMUNICATION
+  // SEND OPERATIONS
   // =============================================================================
 
-  Future<void> _reportTransferEvent(
-    String transferId,
-    String event,
-    String details,
-  ) async {
-    try {
-      await http.post(
-        Uri.parse('$serverBaseUrl/transfer/report'),
-        headers: {"Content-Type": "application/json"},
-        body: json.encode({
-          "transfer_id": transferId,
-          "client_id": _clientId,
-          "event": event,
-          "details": details,
-        }),
-      );
-    } catch (e) {
-      print("⚠️ Failed to report transfer event: $e");
-    }
-  }
-
-  // =============================================================================
-  // UTILITY
-  // =============================================================================
-
-  int get localServerPort => _localServer?.port ?? 0;
-
-  Transfer? getTransfer(String transferId) {
-    try {
-      return _transfers.firstWhere((t) => t.id == transferId);
-    } catch (e) {
-      return null;
-    }
-  }
-  // =============================================================================
-// DATALINK SERVICE - TEIL 2: TRANSFER OPERATIONS
-// =============================================================================
-// Diese Datei ist die Fortsetzung von datalink_service_part1.dart
-// Füge diese Methoden in die DataLinkService Klasse ein
-
-// WICHTIG: Dies sind Extension-Methoden für die DataLinkService Klasse
-// In der finalen Version müssen diese in die Klasse integriert werden
-
-// =============================================================================
-// SEND OPERATIONS
-// =============================================================================
-
-/// Sendet eine einzelne Datei an Ziel-Geräte
   Future<String> sendFile(File file, List<String> targetIds, {String? destinationPath}) async {
-    if (targetIds.isEmpty) {
-      _notifyMessage("No targets selected", isError: true);
-      throw Exception("No targets selected");
-    }
-
-    if (!file.existsSync()) {
-      _notifyMessage("File not found", isError: true);
-      throw Exception("File not found: ${file.path}");
-    }
+    if (targetIds.isEmpty) throw Exception("No targets selected");
+    if (!file.existsSync()) throw Exception("File not found");
 
     final transferId = _generateTransferId();
     final fileName = p.basename(file.path);
     final fileSize = file.lengthSync();
 
-    print("📤 Sending file: $fileName (${_formatBytes(fileSize)})");
+    print("📤 Sending file: $fileName");
 
-    // Offer an alle Targets senden
     for (var targetId in targetIds) {
       await _offerFile(
         filePath: file.path,
@@ -443,73 +376,32 @@ _transfers[existingIndex] = transfer;
         destinationPath: destinationPath,
       );
     }
-
     _notifyMessage("✅ File offered: $fileName");
     return transferId;
   }
 
-  /// Sendet mehrere Dateien
   Future<List<String>> sendFiles(List<File> files, List<String> targetIds, {String? destinationPath}) async {
-    final transferIds = <String>[];
-    
-    for (var file in files) {
-      try {
-        final id = await sendFile(file, targetIds);
-        transferIds.add(id);
-      } catch (e) {
-        print("⚠️ Failed to send ${file.path}: $e");
-      }
+    final ids = <String>[];
+    for (var f in files) {
+      try { ids.add(await sendFile(f, targetIds, destinationPath: destinationPath)); } catch (e) { print(e); }
     }
-    
-    return transferIds;
+    return ids;
   }
 
-  /// Komprimiert einen Ordner und sendet ihn
-  Future<String> sendFolder(
-    Directory folder,
-    List<String> targetIds, {
-    Function(double progress, String message)? onProgress,
-  }) async {
-    if (targetIds.isEmpty) {
-      _notifyMessage("No targets selected", isError: true);
-      throw Exception("No targets selected");
-    }
-
-    if (!folder.existsSync()) {
-      _notifyMessage("Folder not found", isError: true);
-      throw Exception("Folder not found: ${folder.path}");
-    }
-
+  Future<String> sendFolder(Directory folder, List<String> targetIds, {Function(double, String)? onProgress}) async {
+    if (!folder.existsSync()) throw Exception("Folder not found");
+    
     _notifyProcessingState(true);
-    _notifyProgress("zip", 0.0, "Compressing folder...");
-
     try {
-      // Zip im Isolate erstellen
-      final zipPath = await _zipFolderInIsolate(
-        folder.path,
-        onProgress: onProgress,
-      );
-
-      _notifyProgress("zip", 1.0, "Compression complete!");
-      _notifyMessage("📦 Folder compressed!");
-
-      // Zip-File senden
-      final transferId = await sendFile(File(zipPath), targetIds, );
-      
-      // Zip in active operations speichern für Cleanup
+      final zipPath = await _zipFolderInIsolate(folder.path, onProgress: onProgress);
+      final transferId = await sendFile(File(zipPath), targetIds);
       _activeOperations[transferId] = zipPath;
-
       return transferId;
-
-    } catch (e) {
-      _notifyMessage("Compression failed: $e", isError: true);
-      rethrow;
     } finally {
       _notifyProcessingState(false);
     }
   }
 
-  /// Erstellt Offer auf dem Server
   Future<void> _offerFile({
     required String filePath,
     required String targetId,
@@ -518,118 +410,60 @@ _transfers[existingIndex] = transfer;
   }) async {
     final fileName = p.basename(filePath);
     final fileSize = File(filePath).lengthSync();
-    
-    // Basis-Link erstellen
     String directLink = "http://$_myLocalIp:${_localServer!.port}/download/${Uri.encodeComponent(filePath)}";
-
-    // ✅ TRICK: Pfad an den Link anhängen, damit er den Server überlebt
+    
     if (destinationPath != null) {
       directLink += "?save_path=${Uri.encodeComponent(destinationPath)}";
     }
 
     try {
-      final Map<String, dynamic> requestBody = {
-        "transfer_id": transferId,
-        "sender_id": _clientId,
-        "target_id": targetId,
-        "file_name": fileName,
-        "file_size": fileSize,
-        "direct_link": directLink, // Der Link enthält jetzt den Pfad!
-        // Wir senden das Feld trotzdem mit, falls der Server es doch mal unterstützt
-        if (destinationPath != null) "destination_path": destinationPath,
-      };
-
       final response = await http.post(
         Uri.parse('$serverBaseUrl/transfer/offer'),
         headers: {"Content-Type": "application/json"},
-        body: json.encode(requestBody),
-      ).timeout(const Duration(seconds: 10));
+        body: json.encode({
+          "transfer_id": transferId,
+          "sender_id": _clientId,
+          "target_id": targetId,
+          "file_name": fileName,
+          "file_size": fileSize,
+          "direct_link": directLink,
+          if (destinationPath != null) "destination_path": destinationPath,
+        }),
+      );
 
       if (response.statusCode == 200) {
         _activeOperations[transferId] = filePath;
-        print("✅ Offer sent: $fileName → $targetId (to: $destinationPath)");
-      } else {
-        throw Exception("Server returned ${response.statusCode}");
       }
     } catch (e) {
-      print("❌ Failed to offer file: $e");
-      throw Exception("Failed to offer file: $e");
+      print("❌ Failed to offer: $e");
     }
   }
 
   // =============================================================================
-  // RECEIVE OPERATIONS
+  // RECEIVE & DOWNLOAD LOGIC
   // =============================================================================
-
-  /// Verarbeitet eingehende Transfers (wird von Sync Loop aufgerufen)
-  Future<void> processIncomingTransfers(String downloadPath) async {
-    if (downloadPath.isEmpty) {
-      print("⚠️ No download path specified");
-      return;
-    }
-
-    for (var transfer in _transfers) {
-      // Skip bereits verarbeitete
-      if (_processedTransferIds.contains(transfer.id)) continue;
-
-      // Handle basierend auf Status
-      if (transfer.status == TransferStatus.offered) {
-        await _handleOfferedTransfer(transfer, downloadPath);
-      } else if (transfer.status == TransferStatus.relayReady) {
-        await _handleRelayReadyTransfer(transfer, downloadPath);
-      }
-    }
-  }
 
   Future<void> _handleOfferedTransfer(Transfer transfer, String downloadPath) async {
     _processedTransferIds.add(transfer.id);
     
-    // ❌ LÖSCHEN: Diese Zeile muss weg, sie verursacht den Konflikt!
-    // final targetFile = File(p.join(downloadPath, transfer.fileName)); 
-    
-    // ✅ KORREKT: Variable deklarieren
     File targetFile;
-
-    // Prüfen, ob ein spezieller Pfad vom Sender (FileVault) kommt
     if (transfer.destinationPath != null && transfer.destinationPath!.isNotEmpty) {
-      // Speichern im gewünschten Ordner
       targetFile = File(p.join(transfer.destinationPath!, transfer.fileName));
-      print("📂 Saving to specific path: ${targetFile.path}");
     } else {
-      // Standard-Verhalten (Download Ordner)
       targetFile = File(p.join(downloadPath, transfer.fileName));
     }
     
     _notifyMessage("📥 Incoming: ${transfer.fileName}");
     
-    // Versuche P2P Download
     final p2pSuccess = await _tryP2PDownload(transfer, targetFile);
     
     if (p2pSuccess) {
-      _notifyMessage("✨ Downloaded via P2P: ${transfer.fileName}");
-      
-      // Update local transfer
-      final updatedTransfer = transfer.copyWith(
-        status: TransferStatus.completed,
-        mode: TransferMode.p2p,
-        progress: 1.0,
-        completedAt: DateTime.now(),
-      );
-      
-      final index = _transfers.indexWhere((t) => t.id == transfer.id);
-      if (index != -1) {
-        _transfers[index] = updatedTransfer;
-        _notifyTransferUpdate(updatedTransfer);
-      }
-      
+      _notifyMessage("✨ P2P Success: ${transfer.fileName}");
+      _updateTransferStatus(transfer, TransferStatus.completed);
       await _reportTransferEvent(transfer.id, "completed", "via P2P");
     } else {
       _notifyMessage("⚠️ P2P failed, requesting relay...");
-      
-      // Fordere Relay an
       await _requestRelay(transfer.id);
-      
-      // Entferne aus processed damit beim nächsten Sync als RELAY_READY behandelt wird
       _processedTransferIds.remove(transfer.id);
     }
   }
@@ -638,73 +472,35 @@ _transfers[existingIndex] = transfer;
     _processedTransferIds.add(transfer.id);
     final targetFile = File(p.join(downloadPath, transfer.fileName));
     
-    _notifyMessage("☁️ Downloading from relay: ${transfer.fileName}");
-    
+    _notifyMessage("☁️ Downloading from relay...");
     await _downloadFromRelay(transfer, targetFile);
-    
-    // Update local transfer
-    final updatedTransfer = transfer.copyWith(
-      status: TransferStatus.completed,
-      mode: TransferMode.relay,
-      progress: 1.0,
-      completedAt: DateTime.now(),
-    );
-    
-    final index = _transfers.indexWhere((t) => t.id == transfer.id);
-    if (index != -1) {
-      _transfers[index] = updatedTransfer;
-      _notifyTransferUpdate(updatedTransfer);
-    }
+    _updateTransferStatus(transfer, TransferStatus.completed);
   }
-
-  // =============================================================================
-  // P2P DOWNLOAD
-  // =============================================================================
 
   Future<bool> _tryP2PDownload(Transfer transfer, File targetFile) async {
     if (transfer.directLink == null) return false;
-
     _notifyProcessingState(true);
     _notifyProgress(transfer.id, 0.0, "Downloading (P2P)...");
 
     try {
       final request = http.Request('GET', Uri.parse(transfer.directLink!));
-      final response = await http.Client()
-          .send(request)
-          .timeout(const Duration(seconds: 120));
+      final response = await http.Client().send(request).timeout(const Duration(seconds: 120));
 
-      if (response.statusCode != 200) {
-        throw Exception("HTTP ${response.statusCode}");
-      }
+      if (response.statusCode != 200) throw Exception("HTTP ${response.statusCode}");
 
       final sink = targetFile.openWrite();
-      int receivedBytes = 0;
-      final totalBytes = response.contentLength ?? transfer.fileSize;
+      int received = 0;
+      final total = response.contentLength ?? transfer.fileSize;
 
       await for (var chunk in response.stream) {
         sink.add(chunk);
-        receivedBytes += chunk.length;
-
-        _notifyProgress(
-          transfer.id,
-          receivedBytes / totalBytes,
-          "${_formatBytes(receivedBytes)} / ${_formatBytes(totalBytes)}",
-        );
+        received += chunk.length;
+        _notifyProgress(transfer.id, received / total, "${_formatBytes(received)} / ${_formatBytes(total)}");
       }
-
       await sink.close();
-      
-      print("✅ P2P download completed: ${transfer.fileName}");
       return true;
-
     } catch (e) {
-      print("❌ P2P download failed: $e");
-      
-      // Cleanup partial file
-      try {
-        if (targetFile.existsSync()) await targetFile.delete();
-      } catch (_) {}
-      
+      try { if (targetFile.existsSync()) await targetFile.delete(); } catch (_) {}
       return false;
     } finally {
       _notifyProcessingState(false);
@@ -712,7 +508,7 @@ _transfers[existingIndex] = transfer;
   }
 
   // =============================================================================
-  // RELAY OPERATIONS
+  // RELAY HELPERS
   // =============================================================================
 
   Future<void> _requestRelay(String transferId) async {
@@ -721,11 +517,22 @@ _transfers[existingIndex] = transfer;
         Uri.parse('$serverBaseUrl/transfer/request_relay'),
         headers: {"Content-Type": "application/json"},
         body: json.encode({"transfer_id": transferId}),
-      ).timeout(const Duration(seconds: 10));
-      
-      print("📡 Relay requested for $transferId");
-    } catch (e) {
-      print("❌ Failed to request relay: $e");
+      );
+    } catch (e) { print(e); }
+  }
+
+  Future<void> _monitorSenderTasks() async {
+    for (var transferId in _activeOperations.keys.toList()) {
+      try {
+        final response = await http.get(Uri.parse('$serverBaseUrl/transfer/status/$transferId'));
+        if (response.statusCode == 200) {
+          final data = json.decode(response.body);
+          if (data['status'] == "RELAY_REQUESTED" && !_isProcessing) {
+            final filePath = _activeOperations[transferId]!;
+            await _uploadToRelay(filePath, transferId);
+          }
+        }
+      } catch (e) {}
     }
   }
 
@@ -735,77 +542,37 @@ _transfers[existingIndex] = transfer;
 
     try {
       final file = File(filePath);
-      final fileSize = file.lengthSync();
-      
-      // ✅ Nutze StreamedRequest für Progress Tracking
       final uri = Uri.parse('$serverBaseUrl/upload');
       final request = http.StreamedRequest('POST', uri);
-      
-      // Multipart form data manuell erstellen
       final boundary = 'dart-boundary-${DateTime.now().millisecondsSinceEpoch}';
       request.headers['Content-Type'] = 'multipart/form-data; boundary=$boundary';
       
-      // Transfer ID als Field
-      final transferIdField = '--$boundary\r\n'
-          'Content-Disposition: form-data; name="transfer_id"\r\n\r\n'
-          '$transferId\r\n';
-      
-      // File als Field
-      final fileHeader = '--$boundary\r\n'
-          'Content-Disposition: form-data; name="file"; filename="${p.basename(filePath)}"\r\n'
-          'Content-Type: application/octet-stream\r\n\r\n';
-      
+      final transferIdField = '--$boundary\r\nContent-Disposition: form-data; name="transfer_id"\r\n\r\n$transferId\r\n';
+      final fileHeader = '--$boundary\r\nContent-Disposition: form-data; name="file"; filename="${p.basename(filePath)}"\r\nContent-Type: application/octet-stream\r\n\r\n';
       final endBoundary = '\r\n--$boundary--\r\n';
       
-      // Berechne Content-Length
-      final headerBytes = utf8.encode(transferIdField + fileHeader);
-      final endBytes = utf8.encode(endBoundary);
-      final totalSize = headerBytes.length + fileSize + endBytes.length;
+      final totalSize = utf8.encode(transferIdField + fileHeader + endBoundary).length + file.lengthSync();
       request.contentLength = totalSize;
       
-      // ✅ Stream mit Progress Tracking
-      int uploadedBytes = 0;
+      request.sink.add(utf8.encode(transferIdField));
+      request.sink.add(utf8.encode(fileHeader));
       
-      // Header senden
-      request.sink.add(headerBytes);
-      uploadedBytes += headerBytes.length;
-      
-      // File in Chunks streamen
-      final fileStream = file.openRead();
-      await for (var chunk in fileStream) {
+      int sent = 0;
+      await for (var chunk in file.openRead()) {
         request.sink.add(chunk);
-        uploadedBytes += chunk.length;
-        
-        // ✅ Progress Update alle 256KB oder bei Completion
-        if (uploadedBytes % (256 * 1024) == 0 || uploadedBytes >= headerBytes.length + fileSize) {
-          final progress = uploadedBytes / totalSize;
-          _notifyProgress(
-            transferId, 
-            progress,
-            "${_formatBytes(uploadedBytes)} / ${_formatBytes(totalSize)}"
-          );
-        }
+        sent += chunk.length;
+        if (sent % (256 * 1024) == 0) _notifyProgress(transferId, sent / totalSize, "Uploading...");
       }
-      
-      // End Boundary senden
-      request.sink.add(endBytes);
+      request.sink.add(utf8.encode(endBoundary));
       await request.sink.close();
 
-      final response = await request.send().timeout(const Duration(minutes: 60));
-
+      final response = await request.send();
       if (response.statusCode == 200) {
         _activeOperations.remove(transferId);
-        _notifyProgress(transferId, 1.0, "Upload complete!");
-        await _reportTransferEvent(transferId, "completed", "Upload via Relay");
-        _notifyMessage("☁️ Upload completed!");
-        print("✅ Relay upload completed: ${p.basename(filePath)}");
-      } else {
-        throw Exception("HTTP ${response.statusCode}");
+        _notifyMessage("☁️ Upload completed");
+        await _reportTransferEvent(transferId, "completed", "Relay Upload");
       }
-
     } catch (e) {
-      print("❌ Relay upload failed: $e");
-      await _reportTransferEvent(transferId, "failed", "Upload error: $e");
       _notifyMessage("Upload failed: $e", isError: true);
     } finally {
       _notifyProcessingState(false);
@@ -814,207 +581,130 @@ _transfers[existingIndex] = transfer;
 
   Future<void> _downloadFromRelay(Transfer transfer, File targetFile) async {
     _notifyProcessingState(true);
-    _notifyProgress(transfer.id, 0.0, "Downloading from relay...");
-
+    _notifyProgress(transfer.id, 0.0, "Relay Download...");
     try {
-      final response = await http.Client().send(
-        http.Request('GET', Uri.parse('$serverBaseUrl/download/relay/${transfer.id}')),
-      );
-
-      if (response.statusCode != 200) {
-        throw Exception("HTTP ${response.statusCode}");
-      }
-
+      final response = await http.Client().send(http.Request('GET', Uri.parse('$serverBaseUrl/download/relay/${transfer.id}')));
       final sink = targetFile.openWrite();
-      int receivedBytes = 0;
-      final totalBytes = response.contentLength ?? transfer.fileSize;
-
+      int received = 0;
+      final total = response.contentLength ?? transfer.fileSize;
+      
       await for (var chunk in response.stream) {
         sink.add(chunk);
-        receivedBytes += chunk.length;
-
-        _notifyProgress(
-          transfer.id,
-          receivedBytes / totalBytes,
-          "${_formatBytes(receivedBytes)} / ${_formatBytes(totalBytes)}",
-        );
+        received += chunk.length;
+        _notifyProgress(transfer.id, received / total, "Downloading...");
       }
-
       await sink.close();
-      
-      await _reportTransferEvent(transfer.id, "completed", "Downloaded via Relay");
+      await _reportTransferEvent(transfer.id, "completed", "Relay Download");
       _notifyMessage("✅ Downloaded: ${transfer.fileName}");
-      print("✅ Relay download completed: ${transfer.fileName}");
-
     } catch (e) {
-      print("❌ Relay download failed: $e");
-      
-      // Cleanup partial file
-      try {
-        if (targetFile.existsSync()) await targetFile.delete();
-      } catch (_) {}
-      
-      await _reportTransferEvent(transfer.id, "failed", "Download error: $e");
-      _notifyMessage("Download failed: $e", isError: true);
+      _notifyMessage("Download error: $e", isError: true);
     } finally {
       _notifyProcessingState(false);
     }
   }
+
+  // Für FileVault Downloads
   Future<void> startDirectDownload({
     required String fileName,
     required String url,
     required int fileSize,
-    required String senderId, // ID des Geräts, von dem wir laden
+    required String senderId,
   }) async {
-    // 1. Generiere eine Transfer-ID
     final transferId = _generateTransferId();
     final saveDir = Directory(_downloadPath.isNotEmpty ? _downloadPath : Directory.systemTemp.path);
     final targetFile = File(p.join(saveDir.path, fileName));
 
-    print("⬇️ Starting direct download: $fileName from $url");
-
-    // 2. Erstelle ein künstliches Transfer-Objekt für die UI/Logs
     final transfer = Transfer(
       id: transferId,
       fileName: fileName,
       fileSize: fileSize,
       senderId: senderId,
       targetIds: [_clientId],
-      status: TransferStatus.downloading, // Sofort auf Downloading setzen
-      mode: TransferMode.p2p, // FileVault ist immer direkt (P2P)
-      progress: 0.0,
-      createdAt: DateTime.now(),
-      directLink: url, // WICHTIG: Die URL vom FileServer
+      status: TransferStatus.downloading,
+      mode: TransferMode.p2p,
+      directLink: url,
     );
 
-    // 3. Füge es zur Liste hinzu und benachrichtige Listener (damit UI updated)
     _transfers.insert(0, transfer);
     _notifyTransferUpdate(transfer);
     
-    // 4. Starte den Download-Prozess (nutzt deine existierende Logik!)
-    // Wir rufen _tryP2PDownload auf, da dies bereits HTTP-Requests und Progress kann
     final success = await _tryP2PDownload(transfer, targetFile);
-
-    // 5. Abschluss-Handling (wird teilweise schon in _tryP2PDownload gemacht, 
-    // aber wir müssen sicherstellen, dass der Status finalisiert wird)
     if (success) {
-      final completedTransfer = transfer.copyWith(
-        status: TransferStatus.completed,
-        progress: 1.0,
-        completedAt: DateTime.now(),
-      );
-      final index = _transfers.indexWhere((t) => t.id == transferId);
-      if (index != -1) {
-        _transfers[index] = completedTransfer;
-        _notifyTransferUpdate(completedTransfer);
-      }
+      _updateTransferStatus(transfer, TransferStatus.completed);
       _notifyMessage("✅ Download complete: $fileName");
     } else {
-       final failedTransfer = transfer.copyWith(
-        status: TransferStatus.failed,
-        errorMessage: "Connection failed",
-      );
-       final index = _transfers.indexWhere((t) => t.id == transferId);
-      if (index != -1) {
-        _transfers[index] = failedTransfer;
-        _notifyTransferUpdate(failedTransfer);
-      }
       _notifyMessage("❌ Download failed", isError: true);
     }
   }
-  // =============================================================================
-  // FOLDER ZIP (ISOLATE)
-  // =============================================================================
 
-  Future<String> _zipFolderInIsolate(
-    String folderPath, {
-    Function(double progress, String message)? onProgress,
-  }) async {
+  Future<void> _reportTransferEvent(String id, String event, String details) async {
+    try {
+      await http.post(Uri.parse('$serverBaseUrl/transfer/report'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({"transfer_id": id, "client_id": _clientId, "event": event, "details": details}));
+    } catch (_) {}
+  }
+
+  void _updateTransferStatus(Transfer t, TransferStatus s) {
+    final idx = _transfers.indexWhere((tr) => tr.id == t.id);
+    if (idx != -1) {
+      final updated = t.copyWith(status: s, completedAt: s == TransferStatus.completed ? DateTime.now() : null);
+      _transfers[idx] = updated;
+      _notifyTransferUpdate(updated);
+    }
+  }
+
+  String _generateTransferId() => "${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(9999)}";
+  String _formatBytes(int bytes) => bytes < 1024 ? "$bytes B" : "${(bytes / 1024 / 1024).toStringAsFixed(1)} MB";
+
+  Future<String> _zipFolderInIsolate(String folderPath, {Function(double, String)? onProgress}) async {
     final receivePort = ReceivePort();
-    
     await Isolate.spawn(_zipIsolateEntry, [receivePort.sendPort, folderPath]);
-
     String? resultPath;
-    
-    await for (final message in receivePort) {
-      if (message is ZipProgress) {
-        if (message.error != null) {
-          receivePort.close();
-          throw Exception(message.error);
-        }
-
-        if (message.resultPath != null) {
-          resultPath = message.resultPath;
-          receivePort.close();
-          break;
-        } else {
-          onProgress?.call(message.progress, message.message);
-          _notifyProgress("zip", message.progress, message.message);
-        }
+    await for (final msg in receivePort) {
+      if (msg is ZipProgress) {
+        if (msg.error != null) throw Exception(msg.error);
+        if (msg.resultPath != null) { resultPath = msg.resultPath; receivePort.close(); }
+        else { onProgress?.call(msg.progress, msg.message); _notifyProgress("zip", msg.progress, msg.message); }
       }
     }
-
-    if (resultPath == null) {
-      throw Exception("Zip failed: No result path");
-    }
-
-    return resultPath;
-  }
-
-  // =============================================================================
-  // UTILITY
-  // =============================================================================
-
-  String _generateTransferId() {
-    return "${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(9999)}";
-  }
-
-  String _formatBytes(int bytes) {
-    if (bytes < 1024) return "$bytes B";
-    if (bytes < 1024 * 1024) return "${(bytes / 1024).toStringAsFixed(1)} KB";
-    if (bytes < 1024 * 1024 * 1024) return "${(bytes / 1024 / 1024).toStringAsFixed(1)} MB";
-    return "${(bytes / 1024 / 1024 / 1024).toStringAsFixed(2)} GB";
+    return resultPath!;
   }
 }
 
 // =============================================================================
-// ISOLATE FUNCTIONS (AUSSERHALB DER KLASSE!)
+// HELPER CLASSES & ISOLATES
 // =============================================================================
 
-/// Isolate Entry Point für Folder-Komprimierung
+class ZipProgress {
+  final double progress;
+  final String message;
+  final String? resultPath;
+  final String? error;
+  ZipProgress({this.progress = 0.0, this.message = "", this.resultPath, this.error});
+}
+
 void _zipIsolateEntry(List<dynamic> args) async {
   final SendPort sendPort = args[0];
   final String sourcePath = args[1];
-
   try {
     final sourceDir = Directory(sourcePath);
     final folderName = p.basename(sourcePath).replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
-    final tempDir = Directory.systemTemp;
-    final zipPath = p.join(tempDir.path, '${folderName}_${DateTime.now().millisecondsSinceEpoch}.zip');
-
-    sendPort.send(ZipProgress(message: "Analyzing folder structure..."));
+    final zipPath = p.join(Directory.systemTemp.path, '${folderName}_${DateTime.now().millisecondsSinceEpoch}.zip');
     
-    int totalBytes = 0;
-    try {
-      totalBytes = _calculateDirectorySize(sourceDir);
-    } catch (e) {
-      totalBytes = 1;
-    }
-
+    sendPort.send(ZipProgress(message: "Analyzing..."));
+    int totalBytes = _calculateDirectorySize(sourceDir);
     var encoder = ZipFileEncoder();
     encoder.create(zipPath);
-
-    int processedBytes = 0;
-    await _addDirectoryWithProgress(encoder, sourceDir, "", (bytesAdded) {
-      processedBytes += bytesAdded;
-      sendPort.send(ZipProgress(
-        progress: processedBytes / totalBytes,
-        message: "Archiving: ${(processedBytes / 1024 / 1024).toStringAsFixed(1)} MB"
-      ));
+    
+    int processed = 0;
+    await _addDirectoryWithProgress(encoder, sourceDir, "", (bytes) {
+      processed += bytes;
+      sendPort.send(ZipProgress(progress: processed / (totalBytes == 0 ? 1 : totalBytes), message: "Zipping..."));
     });
-
+    
     encoder.close();
-    sendPort.send(ZipProgress(progress: 1.0, message: "Done!", resultPath: zipPath));
+    sendPort.send(ZipProgress(progress: 1.0, message: "Done", resultPath: zipPath));
   } catch (e) {
     sendPort.send(ZipProgress(error: e.toString()));
   }
@@ -1023,45 +713,25 @@ void _zipIsolateEntry(List<dynamic> args) async {
 int _calculateDirectorySize(Directory dir) {
   int size = 0;
   try {
-    final entities = dir.listSync(recursive: false, followLinks: false);
-    for (var entity in entities) {
-      if (entity is File) {
-        size += entity.lengthSync();
-      } else if (entity is Directory) {
-        size += _calculateDirectorySize(entity);
-      }
-    }
-  } catch (e) {}
+    dir.listSync(recursive: false).forEach((e) {
+      if (e is File) size += e.lengthSync();
+      else if (e is Directory) size += _calculateDirectorySize(e);
+    });
+  } catch (_) {}
   return size;
 }
 
-Future<void> _addDirectoryWithProgress(
-  ZipFileEncoder encoder,
-  Directory dir,
-  String relPath,
-  Function(int) onBytesAdded,
-) async {
+Future<void> _addDirectoryWithProgress(ZipFileEncoder encoder, Directory dir, String relPath, Function(int) onAdd) async {
   try {
-    final entities = dir.listSync(recursive: false, followLinks: false);
-    for (var entity in entities) {
-      final name = p.basename(entity.path);
-      if (name.startsWith('.') || name.startsWith(r'$') || name == "System Volume Information") {
-        continue;
+    dir.listSync(recursive: false).forEach((e) {
+      final name = p.basename(e.path);
+      if (name.startsWith('.') || name == "System Volume Information") return;
+      if (e is File) {
+        encoder.addFile(e, p.join(relPath, name));
+        onAdd(e.lengthSync());
+      } else if (e is Directory) {
+        _addDirectoryWithProgress(encoder, e, p.join(relPath, name), onAdd);
       }
-
-      if (entity is File) {
-        try {
-          final len = entity.lengthSync();
-          await encoder.addFile(entity, p.join(relPath, name), 0);
-          onBytesAdded(len);
-        } catch (e) {
-          print("⚠️ Skipping locked file: $name");
-        }
-      } else if (entity is Directory) {
-        await _addDirectoryWithProgress(encoder, entity, p.join(relPath, name), onBytesAdded);
-      }
-    }
-  } catch (e) {
-    print("⚠️ Access denied: ${dir.path}");
-  }
+    });
+  } catch (_) {}
 }
