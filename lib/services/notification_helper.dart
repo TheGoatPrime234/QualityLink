@@ -50,6 +50,7 @@ class NotificationHelper {
   static Future<void> showCompletionNotification({
     required String title,
     required String body,
+    int? timeoutMs,
   }) async {
     if (!Platform.isAndroid) return;
     
@@ -71,6 +72,7 @@ class NotificationHelper {
       // ✅ Zeige als Heads-Up Notification
       visibility: NotificationVisibility.public,
       category: AndroidNotificationCategory.status,
+      timeoutAfter: timeoutMs,
     );
     
     final notificationDetails = NotificationDetails(android: androidDetails);
@@ -85,6 +87,6 @@ class NotificationHelper {
       notificationDetails,
     );
     
-    print("🔔 Completion notification shown: $title - $body");
+    print("🔔 Completion notification shown (Timeout: $timeoutMs ms): $title");
   }
 }
