@@ -178,14 +178,14 @@ class OverlayForegroundService {
     await NotificationHelper.showCompletionNotification(
       title: '✅ Transfer Complete!',
       body: message,
+      timeoutMs: 60000,
     );
     
-    // 2. Stille Service Notification auf "Fertig" setzen
     if (await ft.FlutterForegroundTask.isRunningService) {
       await updateOverlay(
-        status: "Transfer Complete",
-        progress: 1.0,
-        mode: "success",
+        status: "QualityLink Ready",
+        progress: 0.0,
+        mode: "idle",
       );
       
       // Optional: Nach 5 Sekunden auf "Idle" zurücksetzen, damit "Ready" steht
