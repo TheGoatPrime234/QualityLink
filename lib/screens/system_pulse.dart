@@ -6,7 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../config/server_config.dart';
 import '../services/heartbeat_service.dart';
-import '../services/datalink_service.dart';
+import '../services/data_link_service.dart';
 
 // =============================================================================
 // SYSTEM MONITOR SCREEN - MODULE 2 (Enhanced with HeartbeatService Debug Info)
@@ -278,9 +278,6 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
 // FORTSETZUNG VON TEIL 1...
 
   void _showDeviceDetails(Map<String, dynamic> device) {
-    // ✅ FIX: Auch hier sicher abfragen
-    final isOnline = device['online'] == true;
-
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -289,13 +286,13 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
           children: [
             Icon(
               _getDeviceIcon(device['type']),
-              color: isOnline ? const Color(0xFF00FF41) : Colors.grey,
+              color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
               size: 24,
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                device['name'] ?? 'Unknown',
+                device['name'],
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
@@ -305,15 +302,15 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildDetailRow("Status", isOnline ? "🟢 Online" : "🔴 Offline"),
-            _buildDetailRow("Type", device['type'] ?? 'N/A'),
-            _buildDetailRow("IP Address", device['ip'] ?? 'N/A'),
-            _buildDetailRow("Client ID", device['client_id'] ?? 'N/A'),
-            _buildDetailRow("Last Seen", "${device['last_seen_ago'] ?? '?'}s ago"),
+            _buildDetailRow("Status", device['online'] ? "🟢 Online" : "🔴 Offline"),
+            _buildDetailRow("Type", device['type']),
+            _buildDetailRow("IP Address", device['ip']),
+            _buildDetailRow("Client ID", device['client_id']),
+            _buildDetailRow("Last Seen", "${device['last_seen_ago']}s ago"),
             const Divider(color: Colors.grey),
-            _buildDetailRow("Transfers Sent", "${device['transfers_sent'] ?? 0}", color: Colors.orange),
-            _buildDetailRow("Transfers Received", "${device['transfers_received'] ?? 0}", color: const Color(0xFF00E5FF)),
-            _buildDetailRow("Clipboard Entries", "${device['clipboard_entries'] ?? 0}", color: Colors.purple),
+            _buildDetailRow("Transfers Sent", "${device['transfers_sent']}", color: Colors.orange),
+            _buildDetailRow("Transfers Received", "${device['transfers_received']}", color: const Color(0xFF00E5FF)),
+            _buildDetailRow("Clipboard Entries", "${device['clipboard_entries']}", color: Colors.purple),
           ],
         ),
         actions: [
@@ -324,9 +321,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
           ElevatedButton.icon(
             onPressed: () {
               Navigator.pop(context);
-              if (device['client_id'] != null) {
-                 _kickDevice(device['client_id'], device['name'] ?? 'Device');
-              }
+              _kickDevice(device['client_id'], device['name']);
             },
             icon: const Icon(Icons.logout, size: 16),
             label: const Text("Kick"),
@@ -493,308 +488,269 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
 
   void _showAdminPanel() {
     setState(() => _isAdminPanelOpen = true);
+    _startAdminPanelRefresh();
     
-    // Timer für das Modal definieren
-    Timer? modalTimer;
-
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.transparent, // Transparent, da wir Container stylen
+      backgroundColor: const Color(0xFF0A0A0A),
       isScrollControlled: true,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setModalState) {
-          
-          // Timer starten, der NUR das Modal aktualisiert
-          modalTimer ??= Timer.periodic(const Duration(seconds: 2), (t) {
-            if (mounted) {
-              _fetchActiveDevices();
-              _fetchStorageInfo();
-              _updateHeartbeatInfo();
-              // Wichtig: setModalState aktualisiert das Popup, setState den Screen dahinter
-              setModalState(() {}); 
-            }
-          });
-
-          return DraggableScrollableSheet(
-            initialChildSize: 0.7,
-            minChildSize: 0.5,
-            maxChildSize: 0.95,
-            expand: false,
-            builder: (context, scrollController) => Container(
-              // ✅ FIX: Explizite Hintergrundfarbe und Ecken
-              decoration: const BoxDecoration(
-                color: Color(0xFF0A0A0A), 
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-              ),
-              child: SingleChildScrollView(
-                controller: scrollController,
-                child: Container(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Header mit Live Indicator
-                      Center(
-                        child: Container(
-                          width: 40,
-                          height: 4,
-                          margin: const EdgeInsets.only(bottom: 20),
-                          decoration: BoxDecoration(
-                            color: Colors.grey.withValues(alpha: 0.3),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (context, scrollController) => SingleChildScrollView(
+          controller: scrollController,
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header mit Live Indicator
+                Row(
+                  children: [
+                    const Icon(Icons.admin_panel_settings, color: Color(0xFFFF0055), size: 28),
+                    const SizedBox(width: 12),
+                    const Text(
+                      "ADMIN PANEL",
+                      style: TextStyle(
+                        color: Color(0xFFFF0055),
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
                       ),
-                      Row(
+                    ),
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00FF41).withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFF00FF41), width: 1),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.admin_panel_settings, color: Color(0xFFFF0055), size: 28),
-                          const SizedBox(width: 12),
-                          const Text(
-                            "ADMIN PANEL",
-                            style: TextStyle(
-                              color: Color(0xFFFF0055),
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF00FF41),
+                              shape: BoxShape.circle,
                             ),
                           ),
-                          const Spacer(),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF00FF41).withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: const Color(0xFF00FF41), width: 1),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: const BoxDecoration(
-                                    color: Color(0xFF00FF41),
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                const Text(
-                                  "LIVE",
-                                  style: TextStyle(
-                                    color: Color(0xFF00FF41),
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
+                          const SizedBox(width: 6),
+                          const Text(
+                            "LIVE",
+                            style: TextStyle(
+                              color: Color(0xFF00FF41),
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 20),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
 
-                      // Heartbeat Service Status
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF151515),
-                          border: Border.all(color: const Color(0xFFFF0055).withValues(alpha: 0.3)),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  "HEARTBEAT SERVICE",
-                                  style: TextStyle(
-                                    color: Color(0xFFFF0055),
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: (_heartbeatDebugInfo['isConnected'] == true 
-                                      ? const Color(0xFF00FF41) 
-                                      : Colors.red).withValues(alpha: 0.2),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Text(
-                                    _heartbeatDebugInfo['isConnected'] == true ? "CONNECTED" : "OFFLINE",
-                                    style: TextStyle(
-                                      color: _heartbeatDebugInfo['isConnected'] == true 
-                                        ? const Color(0xFF00FF41) 
-                                        : Colors.red,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
+                // Heartbeat Service Status
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF151515),
+                    border: Border.all(color: const Color(0xFFFF0055).withValues(alpha: 0.3)),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            "HEARTBEAT SERVICE",
+                            style: TextStyle(
+                              color: Color(0xFFFF0055),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
                             ),
-                            const SizedBox(height: 12),
-                            Text(
-                              "Interval: ${_heartbeatDebugInfo['heartbeatInterval'] ?? 'N/A'}s",
-                              style: const TextStyle(color: Colors.white70, fontSize: 12),
-                            ),
-                            Text(
-                              "Local IP: ${_heartbeatDebugInfo['localIp'] ?? 'N/A'}",
-                              style: const TextStyle(color: Colors.white70, fontSize: 12),
-                            ),
-                            const SizedBox(height: 8),
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: () {
-                                  // Schließt das Modal nicht, zeigt Overlay darüber
-                                  _showHeartbeatDebug(); 
-                                },
-                                icon: const Icon(Icons.favorite, size: 16),
-                                label: const Text("Show Details"),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: const Color(0xFFFF0055),
-                                  side: const BorderSide(color: Color(0xFFFF0055)),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-
-                      // Active Devices Section
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF151515),
-                          border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.3)),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  "ACTIVE DEVICES",
-                                  style: TextStyle(
-                                    color: Color(0xFF00E5FF),
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF00FF41).withValues(alpha: 0.2),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Text(
-                                    "$_onlineDevices / $_totalDevices online",
-                                    style: const TextStyle(
-                                      color: Color(0xFF00FF41),
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            if (_activeDevices.isEmpty)
-                              const Padding(
-                                padding: EdgeInsets.all(16),
-                                child: Center(
-                                  child: Text(
-                                    "No devices connected",
-                                    style: TextStyle(color: Colors.grey, fontSize: 12),
-                                  ),
-                                ),
-                              )
-                            else
-                              ..._activeDevices.map((device) => _buildDeviceCard(device)),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-
-                      // Storage Info
-                      if (_storageInfo != null) ...[
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF151515),
-                            border: Border.all(color: const Color(0xFF00FF41).withValues(alpha: 0.3)),
-                            borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _storageInfo!['storage_type'] ?? 'Unknown',
-                                style: const TextStyle(
-                                  color: Color(0xFF00FF41),
-                                  fontWeight: FontWeight.bold,
-                                ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: (_heartbeatDebugInfo['isConnected'] == true 
+                                ? const Color(0xFF00FF41) 
+                                : Colors.red).withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              _heartbeatDebugInfo['isConnected'] == true ? "CONNECTED" : "OFFLINE",
+                              style: TextStyle(
+                                color: _heartbeatDebugInfo['isConnected'] == true 
+                                  ? const Color(0xFF00FF41) 
+                                  : Colors.red,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
                               ),
-                              const SizedBox(height: 8),
-                              Text(
-                                "Storage: ${_storageInfo!['used_gb']} / ${_storageInfo!['total_gb']} GB (${_storageInfo!['usage_percent']}%)",
-                                style: const TextStyle(color: Colors.white70, fontSize: 12),
-                              ),
-                              Text(
-                                "Free: ${_storageInfo!['free_gb']} GB",
-                                style: const TextStyle(color: Colors.white70, fontSize: 12),
-                              ),
-                              Text(
-                                "Stored Files: ${_storageInfo!['stored_files']}",
-                                style: const TextStyle(color: Colors.orange, fontSize: 12),
-                              ),
-                            ],
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                      ],
-
-                      // Action Buttons
-                      const Text(
-                        "MAINTENANCE",
-                        style: TextStyle(
-                          color: Colors.orange,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        "Interval: ${_heartbeatDebugInfo['heartbeatInterval'] ?? 'N/A'}s",
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      Text(
+                        "Local IP: ${_heartbeatDebugInfo['localIp'] ?? 'N/A'}",
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                       const SizedBox(height: 8),
-                      _buildAdminButton("Clear Logs Only", Icons.delete_outline, _clearLogs, Colors.orange),
-                      const SizedBox(height: 10),
-                      _buildAdminButton("Clear Transfer Files", Icons.cloud_off, _clearTransfers, Colors.orange),
-                      const SizedBox(height: 10),
-                      _buildAdminButton("Clear Everything", Icons.warning, _clearAll, const Color(0xFFFF0055)),
-                      const SizedBox(height: 20),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: _showHeartbeatDebug,
+                          icon: const Icon(Icons.favorite, size: 16),
+                          label: const Text("Show Details"),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFFFF0055),
+                            side: const BorderSide(color: Color(0xFFFF0055)),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
-              ),
+                const SizedBox(height: 16),
+
+                // FORTSETZUNG IN TEIL 3...
+
+// FORTSETZUNG VON TEIL 2...
+
+                // Active Devices Section
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF151515),
+                    border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.3)),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            "ACTIVE DEVICES",
+                            style: TextStyle(
+                              color: Color(0xFF00E5FF),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF00FF41).withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              "$_onlineDevices / $_totalDevices online",
+                              style: const TextStyle(
+                                color: Color(0xFF00FF41),
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (_activeDevices.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Center(
+                            child: Text(
+                              "No devices connected",
+                              style: TextStyle(color: Colors.grey, fontSize: 12),
+                            ),
+                          ),
+                        )
+                      else
+                        ..._activeDevices.map((device) => _buildDeviceCard(device)),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Storage Info
+                if (_storageInfo != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF151515),
+                      border: Border.all(color: const Color(0xFF00FF41).withValues(alpha: 0.3)),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _storageInfo!['storage_type'] ?? 'Unknown',
+                          style: const TextStyle(
+                            color: Color(0xFF00FF41),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          "Storage: ${_storageInfo!['used_gb']} / ${_storageInfo!['total_gb']} GB (${_storageInfo!['usage_percent']}%)",
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                        Text(
+                          "Free: ${_storageInfo!['free_gb']} GB",
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                        Text(
+                          "Stored Files: ${_storageInfo!['stored_files']}",
+                          style: const TextStyle(color: Colors.orange, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
+                // Action Buttons
+                const Text(
+                  "MAINTENANCE",
+                  style: TextStyle(
+                    color: Colors.orange,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _buildAdminButton("Clear Logs Only", Icons.delete_outline, _clearLogs, Colors.orange),
+                const SizedBox(height: 10),
+                _buildAdminButton("Clear Transfer Files", Icons.cloud_off, _clearTransfers, Colors.orange),
+                const SizedBox(height: 10),
+                _buildAdminButton("Clear Everything", Icons.warning, _clearAll, const Color(0xFFFF0055)),
+                const SizedBox(height: 20),
+              ],
             ),
-          );
-        },
+          ),
+        ),
       ),
     ).whenComplete(() {
-      modalTimer?.cancel(); // Timer aufräumen
-      setState(() => _isAdminPanelOpen = false);
+      _stopAdminPanelRefresh();
     });
   }
 
   Widget _buildDeviceCard(Map<String, dynamic> device) {
-    // ✅ FIX: Sicherer Zugriff auf 'online' (verhindert den Red Screen Crash)
-    final isOnline = device['online'] == true; 
-
     return GestureDetector(
       onTap: () => _showDeviceDetails(device),
       child: Container(
@@ -804,8 +760,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
           color: const Color(0xFF0F0F0F),
           border: Border(
             left: BorderSide(
-              // ✅ FIX: Variable nutzen
-              color: isOnline ? const Color(0xFF00FF41) : Colors.grey,
+              color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
               width: 3,
             ),
           ),
@@ -818,8 +773,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
           children: [
             Icon(
               _getDeviceIcon(device['type']),
-              // ✅ FIX: Variable nutzen
-              color: isOnline ? const Color(0xFF00FF41) : Colors.grey,
+              color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
               size: 20,
             ),
             const SizedBox(width: 12),
@@ -828,7 +782,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    device['name'] ?? 'Unknown', // ✅ FIX: Null-Safety für Name
+                    device['name'],
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -836,7 +790,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
                     ),
                   ),
                   Text(
-                    "${device['ip'] ?? 'N/A'} • ${device['type'] ?? 'unknown'}", // ✅ FIX
+                    "${device['ip']} • ${device['type']}",
                     style: const TextStyle(color: Colors.grey, fontSize: 10),
                   ),
                 ],
@@ -846,16 +800,15 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  // ✅ FIX: Variable nutzen
-                  isOnline ? "ONLINE" : "OFFLINE",
+                  device['online'] ? "ONLINE" : "OFFLINE",
                   style: TextStyle(
-                    color: isOnline ? const Color(0xFF00FF41) : Colors.grey,
+                    color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
                     fontSize: 9,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
                 Text(
-                  "↑${device['transfers_sent'] ?? 0} ↓${device['transfers_received'] ?? 0}", // ✅ FIX
+                  "↑${device['transfers_sent']} ↓${device['transfers_received']}",
                   style: const TextStyle(color: Colors.grey, fontSize: 9),
                 ),
               ],

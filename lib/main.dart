@@ -6,14 +6,17 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import 'screens/datalink_screen.dart';
-import 'screens/system_monitor_screen.dart';
-import 'screens/shared_clipboard_screen.dart';
-import 'screens/network_storage_screen.dart';
+import 'screens/data_link_screen.dart';
+import 'screens/system_pulse.dart';
+import 'screens/sync_paste.dart';
+import 'screens/file_vault.dart';
 import 'widgets/dynamic_island_widget.dart';
 import 'services/notification_helper.dart';
 import 'services/file_server_service.dart';
 import 'services/heartbeat_service.dart';
+
+import 'ui/theme_constants.dart';
+import 'ui/scifi_background.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,35 +47,9 @@ class QualityLinkApp extends StatelessWidget {
     return MaterialApp(
       title: 'QualityLink Hybrid',
       debugShowCheckedModeBanner: false,
-      theme: _buildTheme(),
-      home: const MainSystemShell(),
-    );
-  }
-
-  ThemeData _buildTheme() {
-    final base = ThemeData.dark();
-    return base.copyWith(
-      scaffoldBackgroundColor: const Color(0xFF050505),
-      colorScheme: const ColorScheme.dark(
-        primary: Color(0xFFFF0055),
-        secondary: Color(0xFF00FF41),
-        surface: Color(0xFF101010),
-      ),
-      textTheme: GoogleFonts.rajdhaniTextTheme(base.textTheme).apply(
-        bodyColor: const Color(0xFFEEEEEE),
-        displayColor: const Color(0xFF00FF41),
-      ),
-      cardTheme: CardThemeData(
-        color: const Color(0xFF121212),
-        shape: RoundedRectangleBorder(
-            side: BorderSide(color: Colors.white.withValues(alpha: 0.05), width: 1),
-            borderRadius: BorderRadius.circular(4)),
-      ),
-      bottomNavigationBarTheme: const BottomNavigationBarThemeData(
-        backgroundColor: Color(0xFF080808),
-        selectedItemColor: Color(0xFFFF0055),
-        unselectedItemColor: Colors.grey,
-        type: BottomNavigationBarType.fixed,
+      theme: buildSciFiTheme(), // ✅ Unser neues Theme nutzen
+      home: const SciFiBackground( // ✅ Den Hintergrund global setzen
+        child: MainSystemShell(),
       ),
     );
   }

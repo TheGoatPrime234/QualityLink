@@ -9,7 +9,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import '../config/server_config.dart';
-import '../services/clipboard_background_service.dart' hide serverBaseUrl;
+import '../services/sync_paste_service.dart' hide serverBaseUrl;
+
+import '../ui/theme_constants.dart';
+import '../ui/tech_card.dart';
+import '../ui/parallelogram_button.dart';
 
 // =============================================================================
 // SHARED CLIPBOARD SCREEN (Enhanced with HeartbeatService Integration)
@@ -113,8 +117,11 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
     await prefs.setBool('clipboard_auto_copy', _autoCopyMode);
     
     if (Platform.isAndroid) {
-      if (_autoSync) await _startBackgroundService();
-      else await _stopBackgroundService();
+      if (_autoSync) {
+        await _startBackgroundService();
+      } else {
+        await _stopBackgroundService();
+      }
     }
   }
 
@@ -299,15 +306,17 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.transparent, // Transparent für SciFiBackground
       appBar: AppBar(
-        title: const Text("SHARED CLIPBOARD"),
+        title: const Text("SYNCPASTE"),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        centerTitle: true,
         actions: [
           IconButton(
             icon: Icon(
               _autoSync ? Icons.sync : Icons.sync_disabled,
-              color: _autoSync ? const Color(0xFF00FF41) : Colors.grey,
+              color: _autoSync ? AppColors.primary : Colors.grey,
             ),
             onPressed: () {
               setState(() => _autoSync = !_autoSync);
@@ -318,9 +327,9 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
             child: Padding(
               padding: const EdgeInsets.only(right: 16),
               child: Text(
-                _isConnected ? "SYNCED" : "OFFLINE",
+                _isConnected ? "ONLINE" : "OFFLINE",
                 style: TextStyle(
-                  color: _isConnected ? const Color(0xFF00FF41) : Colors.red,
+                  color: _isConnected ? AppColors.primary : AppColors.warning,
                   fontWeight: FontWeight.bold,
                   fontSize: 10,
                 ),
@@ -331,112 +340,120 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
       ),
       body: Column(
         children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            color: const Color(0xFF0F0F0F),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("Device: ${widget.deviceName}"),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _autoSync ? "Auto-sync: ON" : "Auto-sync: OFF",
-                        style: const TextStyle(color: Colors.grey, fontSize: 10),
+          // INFO HEADER (TechCard)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: TechCard(
+              borderColor: AppColors.accent.withValues(alpha: 0.3),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text("DEVICE ID", style: TextStyle(color: AppColors.textDim, fontSize: 10)),
+                      Text(widget.deviceName, style: const TextStyle(color: AppColors.textMain, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const Divider(color: Colors.white10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _autoSync ? "AUTO-SYNC: ACTIVE" : "AUTO-SYNC: PAUSED",
+                          style: TextStyle(color: _autoSync ? AppColors.primary : Colors.grey, fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
                       ),
-                    ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text(
-                          "Auto-copy: ",
-                          style: TextStyle(color: Colors.grey, fontSize: 10),
-                        ),
-                        Switch(
-                          value: _autoCopyMode,
-                          onChanged: (val) {
-                            setState(() => _autoCopyMode = val);
-                            _saveSettings();
-                          },
-                          activeColor: const Color(0xFF00FF41),
-                          inactiveThumbColor: Colors.grey,
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          if (_availableDevices.length > 1)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: DropdownButtonFormField<String>(
-                value: _selectedDeviceFilter,
-                decoration: InputDecoration(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(4),
-                    borderSide: const BorderSide(color: Color(0xFF00FF41)),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text("AUTO-COPY ", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                          Switch(
+                            value: _autoCopyMode,
+                            onChanged: (val) {
+                              setState(() => _autoCopyMode = val);
+                              _saveSettings();
+                            },
+                            activeThumbColor: AppColors.primary,
+                            inactiveThumbColor: Colors.grey,
+                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                  filled: true,
-                  fillColor: const Color(0xFF0F0F0F),
-                ),
-                dropdownColor: const Color(0xFF1A1A1A),
-                style: const TextStyle(color: Colors.white, fontSize: 12),
-                items: [
-                  DropdownMenuItem(
-                    value: "all",
-                    child: Text("All Devices (${_clipboardEntries.length})"),
-                  ),
-                  ..._availableDevices.map((id) => DropdownMenuItem(
-                    value: id,
-                    child: Text(
-                      "${_getDeviceName(id)} (${_clipboardEntries.where((e) => e['client_id'] == id).length})",
-                    ),
-                  )),
                 ],
-                onChanged: (v) => setState(() => _selectedDeviceFilter = v ?? "all"),
               ),
             ),
+          ),
+
+          // DROPDOWN FILTER
+          if (_availableDevices.length > 1)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: TechCard(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                borderColor: AppColors.accent.withValues(alpha: 0.3),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _selectedDeviceFilter,
+                    dropdownColor: AppColors.card,
+                    isExpanded: true,
+                    style: const TextStyle(color: AppColors.textMain),
+                    icon: const Icon(Icons.arrow_drop_down, color: AppColors.accent),
+                    items: [
+                      DropdownMenuItem(
+                        value: "all",
+                        child: Text("ALL SIGNALS (${_clipboardEntries.length})"),
+                      ),
+                      ..._availableDevices.map((id) => DropdownMenuItem(
+                        value: id,
+                        child: Text("${_getDeviceName(id).toUpperCase()}"),
+                      )),
+                    ],
+                    onChanged: (v) => setState(() => _selectedDeviceFilter = v ?? "all"),
+                  ),
+                ),
+              ),
+            ),
+
+          // ACTIONS (Parallelogram Buttons)
           Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _manualPush,
-                    icon: const Icon(Icons.upload),
-                    label: const Text("PUSH NOW"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF00FF41).withValues(alpha: 0.2),
-                    ),
+                  child: ParallelogramButton(
+                    text: "PUSH NOW",
+                    icon: Icons.upload,
+                    onTap: _manualPush,
+                    color: AppColors.accent,
+                    skew: 0.3, // Neigung nach Rechts
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 15),
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _clearMyHistory,
-                    icon: const Icon(Icons.delete_sweep),
-                    label: const Text("CLEAR MINE"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFFF0055).withValues(alpha: 0.2),
-                    ),
+                  child: ParallelogramButton(
+                    text: "CLEAR MINE",
+                    icon: Icons.delete_sweep,
+                    onTap: _clearMyHistory,
+                    color: AppColors.warning,
+                    skew: -0.3, // Neigung nach Links
                   ),
                 ),
               ],
             ),
           ),
-          const Divider(),
+
+          const Divider(color: Colors.white10),
+
+          // LISTE (TechCards)
           Expanded(
             child: _filteredEntries.isEmpty
-                ? const Center(
+                ? Center(
                     child: Text(
-                      "No entries found",
-                      style: TextStyle(color: Colors.grey),
+                      "NO DATA STREAM",
+                      style: TextStyle(color: AppColors.textDim, letterSpacing: 2),
                     ),
                   )
                 : ListView.builder(
@@ -453,55 +470,46 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
   Widget _buildClipboardCard(Map<String, dynamic> entry) {
     final content = entry['content'] as String;
     final isMyEntry = entry['client_id'] == widget.clientId;
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-      color: isMyEntry ? const Color(0xFF1A1A1A) : const Color(0xFF0F0F0F),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(
-          color: isMyEntry ? const Color(0xFF00FF41).withValues(alpha: 0.3) : Colors.transparent,
-        ),
-      ),
-      child: InkWell(
-        onTap: () => _copyToClipboard(content),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    
+    return TechCard(
+      // Eigene Einträge: Akzentfarbe, Andere: Standard Grau
+      borderColor: isMyEntry ? AppColors.primary.withValues(alpha: 0.5) : Colors.white.withValues(alpha: 0.1),
+      onTap: () => _copyToClipboard(content),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  const Icon(Icons.text_fields, color: Color(0xFF00FF41), size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      entry['client_name'],
-                      style: TextStyle(
-                        color: isMyEntry ? const Color(0xFF00FF41) : Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
-                    ),
+              Icon(Icons.text_fields, color: isMyEntry ? AppColors.primary : AppColors.accent, size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  entry['client_name'].toString().toUpperCase(),
+                  style: TextStyle(
+                    color: isMyEntry ? AppColors.primary : AppColors.accent,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    letterSpacing: 1,
                   ),
-                  Text(
-                    timeago.format(
-                      DateTime.now().subtract(Duration(seconds: entry['age_seconds'])),
-                      locale: 'en_short',
-                    ),
-                    style: const TextStyle(color: Colors.grey, fontSize: 10),
-                  ),
-                ],
+                ),
               ),
-              const SizedBox(height: 8),
               Text(
-                content,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white70, fontSize: 14),
+                timeago.format(
+                  DateTime.now().subtract(Duration(seconds: entry['age_seconds'])),
+                  locale: 'en_short',
+                ).toUpperCase(),
+                style: const TextStyle(color: Colors.grey, fontSize: 10),
               ),
             ],
           ),
-        ),
+          const SizedBox(height: 8),
+          Text(
+            content,
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+          ),
+        ],
       ),
     );
   }

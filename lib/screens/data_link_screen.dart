@@ -9,11 +9,15 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:path/path.dart' as p;
 
-import '../services/datalink_service.dart';
+import '../services/data_link_service.dart';
 import '../services/heartbeat_service.dart';
 import '../services/overlay_foreground_service.dart';
 import '../models/transfer_models.dart';
 import '../widgets/futuristic_progress_bar.dart';
+
+import '../ui/theme_constants.dart';
+import '../ui/tech_card.dart';
+import '../ui/parallelogram_button.dart';
 
 // =============================================================================
 // DATALINK SCREEN - P2P & Relay Dashboard
@@ -561,31 +565,37 @@ Future<void> _pickAndSendFiles() async {
   }
 
   Widget _buildActionButtons() {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: _pickAndSendFiles,
-              icon: const Icon(Icons.file_copy),
-              label: const Text("FILES"),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF222222), minimumSize: const Size(0, 48)),
-            ),
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+    child: Row(
+      children: [
+        // LINKER BUTTON (Neigung nach Rechts / )
+        Expanded(
+          child: ParallelogramButton(
+            text: "FILES",
+            icon: Icons.file_copy,
+            onTap: _pickAndSendFiles,
+            color: AppColors.accent,
+            skew: 0.3, //  Positiv = /
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: _pickAndSendFolder,
-              icon: const Icon(Icons.folder),
-              label: const Text("FOLDER"),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF0055).withValues(alpha: 0.2), minimumSize: const Size(0, 48)),
-            ),
+        ),
+        
+        const SizedBox(width: 15),
+        
+        // RECHTER BUTTON (Neigung nach Links \ )
+        Expanded(
+          child: ParallelogramButton(
+            text: "FOLDER",
+            icon: Icons.folder,
+            onTap: _pickAndSendFolder,
+            color: AppColors.accent, // Oder AppColors.warning
+            skew: -0.3, //  Negativ = \ (Achte auf das MINUS)
           ),
-        ],
-      ),
-    );
-  }
+        ),
+      ],
+    ),
+  );
+}
 
   Widget _buildActivityLog() {
     return Column(
