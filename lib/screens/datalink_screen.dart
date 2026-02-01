@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -17,7 +16,7 @@ import '../models/transfer_models.dart';
 import '../widgets/futuristic_progress_bar.dart';
 
 // =============================================================================
-// DATALINK SCREEN - NUR UI
+// DATALINK SCREEN - P2P & Relay Dashboard
 // =============================================================================
 
 class DataLinkScreen extends StatefulWidget {
@@ -35,11 +34,9 @@ class DataLinkScreen extends StatefulWidget {
 }
 
 class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObserver {
-  // Services
   final DataLinkService _datalink = DataLinkService();
   final HeartbeatService _heartbeat = HeartbeatService();
   
-  // UI State
   List<Peer> _peers = [];
   List<Transfer> _transfers = [];
   final Set<String> _selectedPeerIds = {};
@@ -50,7 +47,6 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
   String _progressMessage = "";
   ProgressBarMode _progressMode = ProgressBarMode.zipping;
   
-  // Settings
   String _selectedPath = "DEFAULT";
   String? _systemDownloadPath;
   List<String> _customPaths = [];
@@ -87,12 +83,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     }
   }
 
-  // =============================================================================
-  // INITIALIZATION
-  // =============================================================================
-
-  Future<void> _initializeServices() async {
-    // Permissions (Android)
+Future<void> _initializeServices() async {
     if (Platform.isAndroid) {
       await Permission.notification.request();
       if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
@@ -100,26 +91,19 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
       }
     }
 
-    // Download Folder ermitteln
     await _locateSystemDownloadFolder();
     await _loadSettings();
 
-    // Heartbeat Service Setup
     _setupHeartbeatService();
 
-    // DataLink Service starten
     await _datalink.start(
       clientId: widget.clientId,
       localIp: _heartbeat.localIp,
     );
 
-    // ✅ Download-Path setzen für automatische Downloads
     _datalink.setDownloadPath(_currentDownloadPath);
-
-    // DataLink Listeners
     _setupDataLinkListeners();
 
-    // Background Service (Android)
     if (Platform.isAndroid) {
       await _ensureOverlayServiceStarted();
     }
@@ -127,9 +111,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
 
   void _setupHeartbeatService() {
     _heartbeat.addConnectionListener((isConnected) {
-      if (mounted) {
-        setState(() => _isConnected = isConnected);
-      }
+      if (mounted) setState(() => _isConnected = isConnected);
     });
 
     _heartbeat.addPeerListener((peers) {
@@ -172,15 +154,12 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
           }
         });
         
-        // Update Service (Visuell)
         _updateOverlayService();
 
-        // ✅ Wenn 100% -> Nur Benachrichtigung, KEIN STOP
         if (progress >= 1.0 && _isProcessing) {
            OverlayForegroundService.showCompletionNotification(
              message ?? "Transfer successfully finished."
            );
-           // Hier wurde früher gestoppt -> jetzt nicht mehr!
         }
       }
     });
@@ -192,7 +171,6 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
            title: "❌ Transfer Failed", 
            body: message
          );
-         // Bei Fehler setzen wir auf "Idle" zurück
          OverlayForegroundService.updateOverlay(
            status: "Ready", 
            progress: 0.0, 
@@ -206,7 +184,6 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
         setState(() => _isProcessing = isProcessing);
         
         if (isProcessing) {
-          // START: Laute Benachrichtigung + Service Start/Update
           if (Platform.isAndroid) {
             OverlayForegroundService.showStatusNotification(
               title: "🚀 Transfer Started",
@@ -214,10 +191,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
             );
           }
           _ensureOverlayServiceStarted();
-          
         } else {
-          // ✅ ENDE: Wir stoppen NICHTS. Wir setzen nur auf "Idle".
-          // Das verhindert Probleme mit dem Neustart des Services.
           if (Platform.isAndroid) {
             OverlayForegroundService.updateOverlay(
               status: "QualityLink Ready",
@@ -230,11 +204,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     });
   }
 
-  // =============================================================================
-  // SETTINGS
-  // =============================================================================
-
-  Future<void> _locateSystemDownloadFolder() async {
+Future<void> _locateSystemDownloadFolder() async {
     if (Platform.isAndroid) await Permission.storage.request();
     
     _systemDownloadPath = Platform.isAndroid
@@ -257,8 +227,6 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('custom_paths', _customPaths);
     await prefs.setString('selected_path', _selectedPath);
-    
-    // ✅ Update Download-Path im Service
     _datalink.setDownloadPath(_currentDownloadPath);
   }
 
@@ -284,10 +252,6 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
         : _selectedPath;
   }
 
-  // =============================================================================
-  // OVERLAY SERVICE
-  // =============================================================================
-
   Future<void> _ensureOverlayServiceStarted() async {
     if (!Platform.isAndroid) return;
 
@@ -302,9 +266,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
       } else if (_isProcessing) {
         await _updateOverlayService();
       }
-    } catch (e) {
-      print("⚠️ Overlay service error: $e");
-    }
+    } catch (e) {}
   }
 
   Future<void> _updateOverlayService() async {
@@ -316,16 +278,10 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
         progress: _progressValue,
         mode: _progressMode.name,
       );
-    } catch (e) {
-      print("⚠️ Update overlay error: $e");
-    }
+    } catch (e) {}
   }
 
-  // =============================================================================
-  // USER ACTIONS
-  // =============================================================================
-
-  Future<void> _pickAndSendFiles() async {
+Future<void> _pickAndSendFiles() async {
     if (_selectedPeerIds.isEmpty) {
       _showSnack("Select at least one target", isError: true);
       return;
@@ -345,7 +301,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
       setState(() => _progressMode = ProgressBarMode.p2p);
       await _datalink.sendFiles(files, _selectedPeerIds.toList());
     } catch (e) {
-      _showSnack("Send failed: $e", isError: true);
+      _showSnack("Send failed", isError: true);
     }
   }
 
@@ -372,7 +328,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
         },
       );
     } catch (e) {
-      _showSnack("Send failed: $e", isError: true);
+      _showSnack("Send failed", isError: true);
     }
   }
 
@@ -388,30 +344,16 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     );
   }
 
-  // FORTSETZUNG IN TEIL 2...
-  // =============================================================================
-// DATALINK SCREEN - TEIL 2: UI BUILD METHODS
-// =============================================================================
-// Diese Datei ist die Fortsetzung von datalink_screen_part1.dart
-// Füge diese Methoden in die _DataLinkScreenState Klasse ein
-
-  // =============================================================================
-  // BUILD
-  // =============================================================================
-
   @override
   Widget build(BuildContext context) {
-    // Gruppiere Peers nach Netzwerk
     final sameLanPeers = _peers.where((p) => p.isSameLan).toList();
     final otherPeers = _peers.where((p) => !p.isSameLan).toList();
 
     return Scaffold(
       backgroundColor: Colors.black,
-      // ✅ FIX: SafeArea hinzufügen
       body: SafeArea(
         child: Column(
           children: [
-            // Progress Bar (soll auch unterhalb der Statusleiste erscheinen)
             if (_isProcessing)
               FuturisticProgressBar(
                 progress: _progressValue,
@@ -420,75 +362,38 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
                 label: "Processing", 
               ),
             
-            // Main Content  
             Expanded(
               child: SingleChildScrollView(
-                // ✅ OPTIONAL: Extra Padding unten, damit man auch das letzte Element gut sieht
                 padding: const EdgeInsets.only(bottom: 20), 
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Header Info
                     _buildHeader(),
-                    
                     const SizedBox(height: 20),
-                    
-                    // Download Path Selector
                     _buildPathSelector(),
-                    
                     const Divider(),
-                    
-                    // ... (Rest bleibt gleich)
-                    
-                    // Peers - Same LAN
                     if (sameLanPeers.isNotEmpty) ...[
                       const Padding(
                         padding: EdgeInsets.symmetric(horizontal: 16),
-                        child: Text(
-                          "SAME NETWORK (P2P)",
-                          style: TextStyle(
-                            color: Color(0xFF00FF41),
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                        child: Text("SAME NETWORK (P2P)", style: TextStyle(color: Color(0xFF00FF41), fontWeight: FontWeight.bold)),
                       ),
                       _buildPeerList(sameLanPeers),
                     ],
-                    
-                    // Peers - Other
                     if (otherPeers.isNotEmpty) ...[
                       const SizedBox(height: 16),
                       const Padding(
                         padding: EdgeInsets.symmetric(horizontal: 16),
-                        child: Text(
-                          "ONLINE (RELAY ONLY)",
-                          style: TextStyle(
-                            color: Colors.orange,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                        child: Text("ONLINE (RELAY ONLY)", style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
                       ),
                       _buildPeerList(otherPeers),
                     ],
-                    
-                    // Empty State
                     if (_peers.isEmpty)
                       const Padding(
                         padding: EdgeInsets.all(32),
-                        child: Center(
-                          child: Text(
-                            "No devices detected...",
-                            style: TextStyle(color: Colors.grey),
-                          ),
-                        ),
+                        child: Center(child: Text("No devices detected...", style: TextStyle(color: Colors.grey))),
                       ),
-                    
-                    // Send Buttons
                     _buildActionButtons(),
-                    
                     const Divider(),
-                    
-                    // Activity Log
                     _buildActivityLog(),
                   ],
                 ),
@@ -500,10 +405,6 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     );
   }
 
-  // =============================================================================
-  // UI COMPONENTS
-  // =============================================================================
-
   Widget _buildHeader() {
     return Container(
       width: double.infinity,
@@ -514,14 +415,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
         children: [
           Row(
             children: [
-              const Text(
-                "DATALINK",
-                style: TextStyle(
-                  color: Color(0xFF00FF41),
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              const Text("DATALINK", style: TextStyle(color: Color(0xFF00FF41), fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(width: 12),
               Container(
                 width: 8,
@@ -529,28 +423,14 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
                 decoration: BoxDecoration(
                   color: _isConnected ? const Color(0xFF00FF41) : Colors.red,
                   shape: BoxShape.circle,
-                  boxShadow: _isConnected
-                      ? [
-                          BoxShadow(
-                            color: const Color(0xFF00FF41).withValues(alpha: 0.5),
-                            blurRadius: 8,
-                            spreadRadius: 2,
-                          )
-                        ]
-                      : null,
+                  boxShadow: _isConnected ? [BoxShadow(color: const Color(0xFF00FF41).withValues(alpha: 0.5), blurRadius: 8, spreadRadius: 2)] : null,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 4),
-          Text(
-            "ID: ${widget.clientId}",
-            style: const TextStyle(color: Colors.grey, fontSize: 10),
-          ),
-          Text(
-            "P2P IP: ${_datalink.myLocalIp}:${_datalink.localServerPort}",
-            style: const TextStyle(color: Colors.grey, fontSize: 10),
-          ),
+          Text("ID: ${widget.clientId}", style: const TextStyle(color: Colors.grey, fontSize: 10)),
+          Text("P2P IP: ${_datalink.myLocalIp}:${_datalink.localServerPort}", style: const TextStyle(color: Colors.grey, fontSize: 10)),
         ],
       ),
     );
@@ -563,52 +443,23 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            "DOWNLOAD LOCATION",
-            style: TextStyle(
-              color: Color(0xFF00FF41),
-              fontWeight: FontWeight.bold,
-            ),
-          ),
+          const Text("DOWNLOAD LOCATION", style: TextStyle(color: Color(0xFF00FF41), fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
-          
-          // Default Path
-          _buildPathOption(
-            "DEFAULT",
-            "System Downloads",
-            _systemDownloadPath ?? "",
-          ),
-          
-          // Custom Paths
-          ..._customPaths.map((path) => _buildPathOption(
-                path,
-                p.basename(path),
-                path,
-                isCustom: true,
-              )),
-          
-          // Add Path Button
+          _buildPathOption("DEFAULT", "System Downloads", _systemDownloadPath ?? ""),
+          ..._customPaths.map((path) => _buildPathOption(path, p.basename(path), path, isCustom: true)),
           OutlinedButton.icon(
             onPressed: _addCustomPath,
             icon: const Icon(Icons.add, size: 14),
             label: const Text("ADD PATH"),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF00FF41),
-            ),
+            style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF00FF41)),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildPathOption(
-    String value,
-    String label,
-    String subtitle, {
-    bool isCustom = false,
-  }) {
+  Widget _buildPathOption(String value, String label, String subtitle, {bool isCustom = false}) {
     final isSelected = _selectedPath == value;
-    
     return GestureDetector(
       onTap: () async {
         setState(() => _selectedPath = value);
@@ -618,39 +469,19 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xFF00FF41).withValues(alpha: 0.1)
-              : const Color(0xFF151515),
-          border: Border.all(
-            color: isSelected
-                ? const Color(0xFF00FF41)
-                : Colors.grey.withValues(alpha: 0.3),
-          ),
+          color: isSelected ? const Color(0xFF00FF41).withValues(alpha: 0.1) : const Color(0xFF151515),
+          border: Border.all(color: isSelected ? const Color(0xFF00FF41) : Colors.grey.withValues(alpha: 0.3)),
         ),
         child: Row(
           children: [
-            Icon(
-              isSelected
-                  ? Icons.radio_button_checked
-                  : Icons.radio_button_unchecked,
-              color: isSelected ? const Color(0xFF00FF41) : Colors.grey,
-            ),
+            Icon(isSelected ? Icons.radio_button_checked : Icons.radio_button_unchecked, color: isSelected ? const Color(0xFF00FF41) : Colors.grey),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: isSelected ? const Color(0xFF00FF41) : Colors.white,
-                    ),
-                  ),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(color: Colors.grey, fontSize: 10),
-                  ),
+                  Text(label, style: TextStyle(fontWeight: FontWeight.bold, color: isSelected ? const Color(0xFF00FF41) : Colors.white)),
+                  Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 10)),
                 ],
               ),
             ),
@@ -679,39 +510,23 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
           return GestureDetector(
             onTap: () {
               setState(() {
-                if (isSelected) {
-                  _selectedPeerIds.remove(peer.id);
-                } else {
-                  _selectedPeerIds.add(peer.id);
-                }
+                if (isSelected) _selectedPeerIds.remove(peer.id);
+                else _selectedPeerIds.add(peer.id);
               });
             },
             child: Container(
               width: 90,
               margin: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: isSelected
-                    ? const Color(0xFF00FF41).withValues(alpha: 0.2)
-                    : const Color(0xFF111111),
-                border: Border.all(
-                  color: isSelected ? const Color(0xFF00FF41) : Colors.grey,
-                ),
+                color: isSelected ? const Color(0xFF00FF41).withValues(alpha: 0.2) : const Color(0xFF111111),
+                border: Border.all(color: isSelected ? const Color(0xFF00FF41) : Colors.grey),
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    _getDeviceIcon(peer.type),
-                    color: isSelected ? Colors.white : Colors.grey,
-                  ),
+                  Icon(_getDeviceIcon(peer.type), color: isSelected ? Colors.white : Colors.grey),
                   const SizedBox(height: 4),
-                  Text(
-                    peer.name,
-                    style: const TextStyle(fontSize: 10),
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  Text(peer.name, style: const TextStyle(fontSize: 10), textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
                 ],
               ),
             ),
@@ -723,18 +538,12 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
 
   IconData _getDeviceIcon(String type) {
     switch (type.toLowerCase()) {
-      case 'android':
-        return Icons.phone_android;
-      case 'ios':
-        return Icons.phone_iphone;
-      case 'windows':
-        return Icons.computer;
-      case 'macos':
-        return Icons.laptop_mac;
-      case 'linux':
-        return Icons.desktop_mac;
-      default:
-        return Icons.devices;
+      case 'android': return Icons.phone_android;
+      case 'ios': return Icons.phone_iphone;
+      case 'windows': return Icons.computer;
+      case 'macos': return Icons.laptop_mac;
+      case 'linux': return Icons.desktop_mac;
+      default: return Icons.devices;
     }
   }
 
@@ -748,10 +557,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
               onPressed: _pickAndSendFiles,
               icon: const Icon(Icons.file_copy),
               label: const Text("FILES"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF222222),
-                minimumSize: const Size(0, 48),
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF222222), minimumSize: const Size(0, 48)),
             ),
           ),
           const SizedBox(width: 10),
@@ -760,10 +566,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
               onPressed: _pickAndSendFolder,
               icon: const Icon(Icons.folder),
               label: const Text("FOLDER"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF0055).withValues(alpha: 0.2),
-                minimumSize: const Size(0, 48),
-              ),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF0055).withValues(alpha: 0.2), minimumSize: const Size(0, 48)),
             ),
           ),
         ],
@@ -777,32 +580,19 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
       children: [
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Text(
-            "ACTIVITY LOG",
-            style: TextStyle(
-              color: Color(0xFF00FF41),
-              fontWeight: FontWeight.bold,
-            ),
-          ),
+          child: Text("ACTIVITY LOG", style: TextStyle(color: Color(0xFF00FF41), fontWeight: FontWeight.bold)),
         ),
-        // Du kannst diesen Abstand hier auch verringern, z.B. auf 4
         const SizedBox(height: 8),
         
         if (_transfers.isEmpty)
           const Padding(
             padding: EdgeInsets.all(32),
-            child: Center(
-              child: Text(
-                "No transfers yet",
-                style: TextStyle(color: Colors.grey, fontSize: 12),
-              ),
-            ),
+            child: Center(child: Text("No transfers yet", style: TextStyle(color: Colors.grey, fontSize: 12))),
           )
         else
           ListView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            // ✅ FIX 2: Entfernt den automatischen Abstand oben in der Liste
             padding: EdgeInsets.zero, 
             itemCount: _transfers.length,
             itemBuilder: (context, index) {
@@ -830,45 +620,17 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
     }
 
     return ListTile(
-      // ✅ WICHTIG: dense: true ist WEG (damit Schrift/Icons normal groß bleiben)
-      
-      // ✅ Zieht die Zeile vertikal zusammen (-4 ist das Maximum an "Enge")
       visualDensity: const VisualDensity(horizontal: 0, vertical: -3), 
-      
-      // ✅ Entfernt unnötigen Innenabstand oben/unten
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-      
-      // Optional: Verringert Abstand zwischen Titel und Untertitel
       minVerticalPadding: 0, 
-      
-      leading: Icon(icon, color: iconColor), // Normale Icon-Größe
-      title: Text(
-        transfer.fileName,
-        style: const TextStyle(fontSize: 18), // Normale Schriftgröße
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      leading: Icon(icon, color: iconColor), 
+      title: Text(transfer.fileName, style: const TextStyle(fontSize: 18), maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(
-        transfer.isCompleted
-            ? "Complete • ${transfer.sizeFormatted}"
-            : transfer.isFailed
-                ? "Failed"
-                : "${transfer.status.name} • ${transfer.progressFormatted}",
-        style: TextStyle(
-          color: transfer.isCompleted ? const Color(0xFF00FF41) : Colors.grey,
-          fontSize: 13,
-        ),
+        transfer.isCompleted ? "Complete • ${transfer.sizeFormatted}" : transfer.isFailed ? "Failed" : "${transfer.status.name} • ${transfer.progressFormatted}",
+        style: TextStyle(color: transfer.isCompleted ? const Color(0xFF00FF41) : Colors.grey, fontSize: 13),
       ),
       trailing: transfer.isActive
-          ? SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(
-                value: transfer.progress,
-                strokeWidth: 2,
-                color: const Color(0xFF00FF41),
-              ),
-            )
+          ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(value: transfer.progress, strokeWidth: 2, color: const Color(0xFF00FF41)))
           : null,
     );
   }
