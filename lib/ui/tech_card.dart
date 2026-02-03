@@ -5,6 +5,7 @@ class TechCard extends StatelessWidget {
   final Widget child;
   final Color? borderColor;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress; // ✅ NEU: LongPress Support
   final EdgeInsetsGeometry padding;
   final double cornerSize;
 
@@ -13,6 +14,7 @@ class TechCard extends StatelessWidget {
     required this.child, 
     this.borderColor, 
     this.onTap,
+    this.onLongPress, // ✅ NEU
     this.padding = const EdgeInsets.all(16),
     this.cornerSize = 10.0,
   });
@@ -27,15 +29,15 @@ class TechCard extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
+          onLongPress: onLongPress, // ✅ NEU: Wird an InkWell weitergereicht
           splashColor: (borderColor ?? AppColors.primary).withValues(alpha: 0.1),
-          // Custom Clipper für abgeschnittene Ecken
           customBorder: CutCornerBorder(cutSize: cornerSize), 
           child: CustomPaint(
             painter: TechBorderPainter(color: color, cutSize: cornerSize),
             child: Container(
               padding: padding,
               decoration: BoxDecoration(
-                color: AppColors.card.withValues(alpha: 0.6), // Leicht transparent
+                color: AppColors.card.withValues(alpha: 0.6),
               ),
               child: child,
             ),
@@ -46,6 +48,7 @@ class TechCard extends StatelessWidget {
   }
 }
 
+// ... (Rest der Datei: TechBorderPainter und CutCornerBorder bleiben unverändert)
 // Malt den Rahmen mit abgeschnittenen Ecken
 class TechBorderPainter extends CustomPainter {
   final Color color;
