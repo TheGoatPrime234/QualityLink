@@ -16,7 +16,8 @@
     <application
         android:label="QualityLink"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         
         <!-- HAUPT ACTIVITY (nur einmal definiert!) -->
         <activity

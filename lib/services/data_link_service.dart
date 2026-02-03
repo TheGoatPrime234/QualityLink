@@ -194,13 +194,63 @@ class DataLinkService {
       final event = data['event'];
 
       if (event == 'transfer_offer') {
-        // 🔥 INSTANT DOWNLOAD TRIGGER!
         print("🚀 INSTANT OFFER RECEIVED via WebSocket!");
         final transferData = data['transfer'];
         _handleInstantOffer(transferData);
       } 
+      // ✅ NEU: Remote Commands ausführen
+      else if (event == 'execute_command') {
+        _handleRemoteCommand(data);
+      }
     } catch (e) {
       print("⚠️ WS Message Parse Error: $e");
+    }
+  }
+
+  // ✅ NEUE METHODE: Führt Befehle vom Server aus
+  Future<void> _handleRemoteCommand(Map<String, dynamic> data) async {
+    final action = data['action'];
+    final params = data['params'];
+    final senderId = data['sender_id'];
+
+    print("🤖 Executing remote command: $action");
+
+    if (action == 'delete') {
+      final path = params['path'];
+      if (path != null) {
+        try {
+          final entity = File(path);
+          if (await entity.exists()) {
+            await entity.delete();
+            print("🗑️ File deleted: $path");
+          } else {
+            final dir = Directory(path);
+            if (await dir.exists()) {
+              await dir.delete(recursive: true);
+              print("🗑️ Folder deleted: $path");
+            }
+          }
+          
+          // Optional: Erfolgsmeldung zurück an Server senden (für Phase 3)
+          _sendToWebSocket({
+            "event": "command_result",
+            "target_id": senderId,
+            "status": "success",
+            "action": "delete",
+            "path": path
+          });
+          
+        } catch (e) {
+          print("❌ Delete failed: $e");
+        }
+      }
+    }
+  }
+  
+  // Hilfsmethode um WS Nachrichten zu senden (falls noch nicht vorhanden)
+  void _sendToWebSocket(Map<String, dynamic> data) {
+    if (_wsChannel != null && _isWsConnected) {
+      _wsChannel!.sink.add(json.encode(data));
     }
   }
 
