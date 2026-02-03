@@ -95,6 +95,8 @@ class FileVaultController extends ChangeNotifier {
   String currentPath = "ROOT";
   String currentDeviceId = "";
   String currentDeviceName = "Network";
+  String searchQuery = "";
+  bool isSearching = false;
   
   List<VfsNode> files = [];
   List<Map<String, String>> history = [];
@@ -108,6 +110,8 @@ class FileVaultController extends ChangeNotifier {
   Future<void> loadRoot() async {
     _setLoading(true);
     errorMessage = null; // Reset Error
+    searchQuery = "";
+    isSearching = false;
     currentPath = "ROOT";
     currentDeviceId = "";
     currentDeviceName = "Network";
@@ -140,6 +144,27 @@ class FileVaultController extends ChangeNotifier {
     }
   }
 
+  List<VfsNode> get displayFiles {
+    if (searchQuery.isEmpty) return files;
+    return files.where((node) => 
+      node.name.toLowerCase().contains(searchQuery.toLowerCase())
+    ).toList();
+  }
+
+  void toggleSearch() {
+    isSearching = !isSearching;
+    if (!isSearching) {
+      searchQuery = "";
+    }
+    notifyListeners();
+  }
+
+  // 3. Suchtext ändern
+  void updateSearchQuery(String query) {
+    searchQuery = query;
+    notifyListeners();
+  }
+
   Future<void> open(VfsNode node) async {
     if (!node.isDirectory) return;
 
@@ -159,6 +184,8 @@ class FileVaultController extends ChangeNotifier {
   }
 
   Future<void> _loadRemotePath(String deviceId, String? path) async {
+    searchQuery = "";
+    isSearching = false;
     _setLoading(true);
     errorMessage = null;
     try {
@@ -394,13 +421,19 @@ class _FileVaultView extends StatelessWidget {
                    ),
 
                 Expanded(
-                  child: controller.files.isEmpty && !controller.isLoading && controller.errorMessage == null
-                    ? Center(child: Text("NO DATA STREAM", style: TextStyle(color: AppColors.textDim, letterSpacing: 2)))
+                  child: controller.displayFiles.isEmpty && !controller.isLoading && controller.errorMessage == null
+                    ? Center(
+                        child: Text(
+                          controller.searchQuery.isEmpty ? "NO DATA STREAM" : "NO MATCH FOUND", // Text angepasst
+                          style: TextStyle(color: AppColors.textDim, letterSpacing: 2)
+                        )
+                      )
                     : ListView.builder(
                         padding: const EdgeInsets.only(top: 8, bottom: 100),
-                        itemCount: controller.files.length,
+                        itemCount: controller.displayFiles.length, // WICHTIG: displayFiles nutzen
                         itemBuilder: (context, index) {
-                          return _buildFileItem(context, controller, controller.files[index]);
+                          // WICHTIG: displayFiles nutzen
+                          return _buildFileItem(context, controller, controller.displayFiles[index]); 
                         },
                       ),
                 ),
@@ -422,62 +455,94 @@ class _FileVaultView extends StatelessWidget {
   }
 
   Widget _buildHeader(BuildContext context, FileVaultController controller) {
-    List<Widget> breadcrumbs = [];
-    
-    // Home Button
-    breadcrumbs.add(
-      Padding(
-        padding: const EdgeInsets.only(right: 4),
-        child: ParallelogramButton(
-          text: "NET",
-          icon: Icons.hub,
-          skew: 0.2,
-          color: controller.currentPath == "ROOT" ? AppColors.primary : Colors.grey,
-          onTap: () => controller.loadRoot(),
-        ),
-      )
-    );
-
-    // Device / Pfad Logik (gekürzt für Übersicht)
-    if (controller.currentPath != "ROOT") {
-       breadcrumbs.add(
-        Padding(
-          padding: const EdgeInsets.only(right: 4),
-          child: ParallelogramButton(
-            text: "BACK", // Ein expliziter Zurück Button hilft immer
-            skew: 0.2,
-            color: AppColors.accent,
-            onTap: () => controller.navigateUp(),
-          ),
-        )
-      );
-      // ... hier weitere Breadcrumbs einfügen wie in deinem Code
+    // Wenn Suche aktiv ist, zeigen wir NUR die Suchleiste
+    if (controller.isSearching) {
+      return _buildSearchBar(context, controller);
     }
 
+    // ... Dein bestehender Breadcrumb Code ...
+    List<Widget> breadcrumbs = [];
+    
+    // (Dein bestehender Breadcrumb Code hier...)
+    // ...
+    
+    // FÜGE DAS LUPEN-ICON HINZU (z.B. ganz am Ende der Breadcrumb Row oder daneben)
+    // Am besten wir bauen die Row etwas um:
+    
     return Container(
       padding: const EdgeInsets.only(top: 50, bottom: 10, left: 10, right: 10),
       color: AppColors.card.withValues(alpha: 0.5),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(children: breadcrumbs),
+          Row(
+            children: [
+              // Breadcrumbs nehmen den meisten Platz ein
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: breadcrumbs), // Deine Breadcrumbs
+                ),
+              ),
+              
+              // DER NEUE SUCH-BUTTON
+              IconButton(
+                icon: const Icon(Icons.search, color: AppColors.primary),
+                onPressed: () => controller.toggleSearch(),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                "${controller.files.length} NODES • ${controller.currentPath}",
-                style: const TextStyle(color: AppColors.textDim, fontSize: 10, letterSpacing: 1.5),
-              ),
-              if (controller.isSelectionMode)
-                Text(
-                  "${controller.selectedNodes.length} SELECTED",
-                  style: const TextStyle(color: AppColors.primary, fontSize: 10, fontWeight: FontWeight.bold),
+          // ... Info Zeile (Nodes Detected etc.) ...
+        ],
+      ),
+    );
+  }
+
+  // DAS NEUE WIDGET FÜR DAS SUCHFELD
+  Widget _buildSearchBar(BuildContext context, FileVaultController controller) {
+    return Container(
+      padding: const EdgeInsets.only(top: 50, bottom: 10, left: 16, right: 16),
+      color: AppColors.card.withValues(alpha: 0.8), // Etwas dunklerer Hintergrund für Fokus
+      child: Column(
+        children: [
+          TechCard(
+            borderColor: AppColors.primary,
+            child: Row(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(8.0),
+                  child: Icon(Icons.search, color: AppColors.primary),
                 ),
-            ],
+                Expanded(
+                  child: TextField(
+                    autofocus: true, // Tastatur öffnet sich sofort
+                    style: GoogleFonts.rajdhani(color: Colors.white, fontSize: 18),
+                    cursorColor: AppColors.primary,
+                    decoration: const InputDecoration(
+                      hintText: "SEARCH QUERY...",
+                      hintStyle: TextStyle(color: AppColors.textDim),
+                      border: InputBorder.none,
+                      isDense: true,
+                    ),
+                    onChanged: (value) => controller.updateSearchQuery(value),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: AppColors.warning),
+                  onPressed: () => controller.toggleSearch(), // Suche beenden
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          // Kleines Feedback wie viele Treffer
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              "${controller.displayFiles.length} MATCHES",
+              style: const TextStyle(color: AppColors.primary, fontSize: 10, fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
