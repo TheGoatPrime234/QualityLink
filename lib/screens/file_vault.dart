@@ -7,6 +7,8 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
+import 'package:http/http.dart' as http;
 
 // Deine Imports (Lasse diese so, wie sie in deinem Projekt sind)
 import '../config/server_config.dart';
@@ -179,6 +181,8 @@ class FileVaultController extends ChangeNotifier {
   }
 
   Future<void> performDeepSearch(String query) async {
+    // FEHLER WAR HIER: Hier stand Code, der auf 'response' zugriff, bevor es existierte.
+    
     if (query.isEmpty) return;
     
     _setLoading(true);
@@ -211,19 +215,25 @@ class FileVaultController extends ChangeNotifier {
         print("🔎 DEEP SCAN: $url");
         final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
 
+        // HIER IST DER RICHTIGE ORT FÜR DIE LOGIK:
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           final rawFiles = List<dynamic>.from(data['files']);
           
-          files = rawFiles.map((f) => VfsNode(
-            name: f['name'],
-            path: f['path'],
-            deviceId: currentDeviceId,
-            deviceName: currentDeviceName,
-            isDirectory: f['is_directory'],
-            size: f['size'] ?? 0,
-            modified: f['modified'] ?? 0,
-          )).toList();
+          files = rawFiles.map((f) {
+            // WICHTIG: Die neue Logik für Cloud-Dateien
+            final sourceDevice = f['device_id'] ?? currentDeviceId;
+            
+            return VfsNode(
+              name: f['name'],
+              path: f['path'],
+              deviceId: sourceDevice, 
+              deviceName: sourceDevice == currentDeviceId ? currentDeviceName : "Remote ($sourceDevice)",
+              isDirectory: f['is_directory'],
+              size: f['size'] ?? 0,
+              modified: f['modified'] ?? 0,
+            );
+          }).toList();
         } else {
           errorMessage = "SCAN FAILED: ${response.statusCode}";
         }
@@ -244,6 +254,72 @@ class FileVaultController extends ChangeNotifier {
       else _loadRemotePath(currentDeviceId, currentPath);
     }
     notifyListeners();
+  }
+  
+  Future<void> _sendCommandToRelay(String action, Map<String, dynamic> params) async {
+    if (currentDeviceId.isEmpty) return;
+    
+    final bodyData = json.encode({
+      "sender_id": "MASTER_CONTROL", // Oder deine ClientID
+      "target_id": currentDeviceId,  // Das Zielgerät (PC/Handy)
+      "action": action,
+      "params": params
+    });
+
+    print("🚀 Sending Relay Command: $action to $currentDeviceId");
+
+    final response = await http.post(
+      Uri.parse('$_serverUrl/storage/remote/command'),
+      headers: {"Content-Type": "application/json"},
+      body: bodyData,
+    ).timeout(const Duration(seconds: 5));
+
+    if (response.statusCode != 200) {
+      throw Exception("Server Relay Error: ${response.statusCode}");
+    }
+  }
+
+
+  // 2. Löschen - jetzt über Relay
+  Future<void> deleteNodes() async {
+    if (selectedNodes.isEmpty) return;
+    _setLoading(true);
+    
+    for (var node in selectedNodes) {
+      try {
+        await _sendCommandToRelay("delete", {
+          "path": node.path
+        });
+      } catch (e) {
+        print("❌ Delete Error: $e");
+        errorMessage = "Delete Failed: $e";
+      }
+    }
+
+    clearSelection();
+    await Future.delayed(const Duration(seconds: 1));
+    // Wenn wir im Root waren, Root neu laden, sonst Ordner
+    if (currentPath == "ROOT" || currentPath == "Drives") {
+        loadRoot();
+    } else {
+        _loadRemotePath(currentDeviceId, currentPath);
+    }
+  }
+
+  // 3. Umbenennen - jetzt über Relay
+  Future<void> renameNode(VfsNode node, String newName) async {
+    _setLoading(true);
+    try {
+      await _sendCommandToRelay("rename", {
+        "path": node.path,
+        "new_name": newName
+      });
+      await Future.delayed(const Duration(milliseconds: 500));
+      _loadRemotePath(currentDeviceId, currentPath);
+    } catch (e) {
+      errorMessage = "Rename failed: $e";
+      _setLoading(false);
+    }
   }
 
   Future<void> _loadRemotePath(String deviceId, String? path) async {
@@ -321,46 +397,6 @@ class FileVaultController extends ChangeNotifier {
       errorMessage = "Remote connection failed: $e";
     } finally {
       _setLoading(false);
-    }
-  }
-
-  Future<void> deleteNodes() async {
-    if (selectedNodes.isEmpty) return;
-    _setLoading(true);
-    
-    final nodesToDelete = List<VfsNode>.from(selectedNodes);
-
-    for (var node in nodesToDelete) {
-      print("🚀 DELETE: ${node.path}");
-      try {
-        final bodyData = json.encode({
-          "sender_id": "MASTER_CONTROL",
-          "target_id": node.deviceId,
-          "action": "delete",
-          "params": { "path": node.path }
-        });
-
-        final response = await http.post(
-          Uri.parse('$_serverUrl/storage/remote/command'),
-          headers: { "Content-Type": "application/json" },
-          body: bodyData,
-        ).timeout(const Duration(seconds: 5));
-
-        if (response.statusCode != 200) {
-          errorMessage = "Delete Error: ${response.statusCode}";
-        }
-      } catch (e) {
-        errorMessage = "Network Error: $e";
-      }
-    }
-
-    clearSelection();
-    await Future.delayed(const Duration(seconds: 1));
-    
-    if (currentPath == "ROOT") {
-      await loadRoot();
-    } else {
-      await _loadRemotePath(currentDeviceId, currentPath);
     }
   }
 

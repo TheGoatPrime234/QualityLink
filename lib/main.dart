@@ -14,6 +14,7 @@ import 'widgets/dynamic_island_widget.dart';
 import 'services/notification_helper.dart';
 import 'services/file_server_service.dart';
 import 'services/heartbeat_service.dart';
+import 'config/server_config.dart';
 
 import 'ui/theme_constants.dart';
 import 'ui/scifi_background.dart';
@@ -133,6 +134,13 @@ class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingOb
     setState(() {
       _isInitializing = false;
     });
+    Future.delayed(const Duration(seconds: 2), () {
+        FileServerService.syncLocalIndex(
+            serverBaseUrl, 
+            _myClientId
+        );
+    });
+    
   }
 
   Future<void> _requestStoragePermissions() async {

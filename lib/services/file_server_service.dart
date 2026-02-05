@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart'; // ✅ WICHTIG für Android 11+
@@ -591,6 +592,81 @@ class FileServerService {
     }
     
     return false;
+  }
+
+  static Future<void> syncLocalIndex(String serverUrl, String myClientId) async {
+    if (_availablePaths.isEmpty) await start(); // Sicherstellen, dass wir Pfade haben
+
+    print("🔄 Scanning local files for index sync...");
+    List<Map<String, dynamic>> fullIndex = [];
+
+    for (var path in _availablePaths) {
+      final dir = Directory(path);
+      if (await dir.exists()) {
+        await _scanDirectoryRecursive(dir, fullIndex, maxDepth: 4); // Max Tiefe 4 gegen Endlosschleifen
+      }
+    }
+
+    print("📤 Pushing index (${fullIndex.length} items) to server...");
+    
+    try {
+      final response = await http.post(
+        Uri.parse('$serverUrl/index/push'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "client_id": myClientId,
+          "files": fullIndex
+        }),
+      );
+      
+      if (response.statusCode == 200) {
+        print("✅ Index sync successful!");
+      } else {
+        print("⚠️ Index sync failed: ${response.statusCode}");
+      }
+    } catch (e) {
+      print("❌ Index sync error: $e");
+    }
+  }
+
+  static Future<void> _scanDirectoryRecursive(
+    Directory dir, 
+    List<Map<String, dynamic>> indexList, 
+    {int currentDepth = 0, int maxDepth = 4}
+  ) async {
+    if (currentDepth > maxDepth) return;
+    if (indexList.length > 5000) return; // Limit, damit JSON nicht explodiert
+
+    try {
+      final entities = dir.listSync(recursive: false);
+      for (var entity in entities) {
+        if (p.basename(entity.path).startsWith('.')) continue; // Versteckte ignorieren
+
+        final isDir = entity is Directory;
+        int size = 0;
+        int modified = 0;
+
+        if (!isDir && entity is File) {
+          try { size = entity.lengthSync(); } catch (_) {}
+        }
+        try { modified = entity.statSync().modified.millisecondsSinceEpoch; } catch (_) {}
+
+        indexList.add({
+          "name": p.basename(entity.path),
+          "path": entity.path, // Absoluter Pfad (wichtig für den Zugriff später)
+          "is_directory": isDir,
+          "size": size,
+          "modified": modified
+        });
+
+        if (isDir) {
+          await _scanDirectoryRecursive(entity as Directory, indexList, 
+              currentDepth: currentDepth + 1, maxDepth: maxDepth);
+        }
+      }
+    } catch (e) {
+      // Zugriff verweigert etc. ignorieren
+    }
   }
 
   static String _getFileType(String path) {
