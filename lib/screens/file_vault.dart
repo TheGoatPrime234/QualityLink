@@ -181,8 +181,6 @@ class FileVaultController extends ChangeNotifier {
   }
 
   Future<void> performDeepSearch(String query) async {
-    // FEHLER WAR HIER: Hier stand Code, der auf 'response' zugriff, bevor es existierte.
-    
     if (query.isEmpty) return;
     
     _setLoading(true);
@@ -192,54 +190,65 @@ class FileVaultController extends ChangeNotifier {
     errorMessage = null;
 
     try {
-      String searchRoot = (currentPath == "ROOT" || currentPath == "Drives") ? "" : currentPath;
-      
-      if (currentDeviceId.isEmpty) {
-        errorMessage = "SELECT A DRIVE FIRST";
-        _setLoading(false);
-        return;
-      }
-      
-      final devResponse = await http.get(Uri.parse('$_serverUrl/storage/devices'));
-      final devData = json.decode(devResponse.body);
-      final device = (devData['devices'] as List).firstWhere(
-        (d) => d['client_id'] == currentDeviceId, orElse: () => null
-      );
+      String searchUrl;
 
-      if (device != null) {
+      // FALL A: GLOBALE SUCHE (Wir sind im Root / "Drives")
+      // Wir fragen den Raspberry Pi (Zentrale), da er alle Indizes kennt.
+      if (currentDeviceId.isEmpty || currentPath == "ROOT" || currentPath == "Drives") {
+         print("🌍 GLOBAL SEARCH via $_serverUrl");
+         // Wir nutzen _serverUrl (die Adresse vom Pi aus der Config)
+         searchUrl = '$_serverUrl/files/search?query=${Uri.encodeComponent(query)}';
+      } 
+      // FALL B: LOKALE SUCHE (Wir sind in einem Ordner auf einem Gerät)
+      // Wir fragen das Gerät direkt für maximale Geschwindigkeit.
+      else {
+        final devResponse = await http.get(Uri.parse('$_serverUrl/storage/devices'));
+        final devData = json.decode(devResponse.body);
+        final device = (devData['devices'] as List).firstWhere(
+          (d) => d['client_id'] == currentDeviceId, orElse: () => null
+        );
+
+        if (device == null) throw Exception("Device not found");
+        
         final ip = device['ip'];
         final port = device['file_server_port'];
         
-        final url = 'http://$ip:$port/files/search?query=${Uri.encodeComponent(query)}&path=${Uri.encodeComponent(searchRoot)}';
+        // Suchpfad einschränken (optional, falls das Gerät das unterstützt)
+        String searchRoot = currentPath;
         
-        print("🔎 DEEP SCAN: $url");
-        final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+        searchUrl = 'http://$ip:$port/files/search?query=${Uri.encodeComponent(query)}&path=${Uri.encodeComponent(searchRoot)}';
+      }
 
-        // HIER IST DER RICHTIGE ORT FÜR DIE LOGIK:
-        if (response.statusCode == 200) {
+      print("🔎 SEARCH CALL: $searchUrl");
+      
+      final response = await http.get(Uri.parse(searchUrl)).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
           final data = json.decode(response.body);
           final rawFiles = List<dynamic>.from(data['files']);
           
           files = rawFiles.map((f) {
-            // WICHTIG: Die neue Logik für Cloud-Dateien
+            // WICHTIG: Bei globaler Suche sagt der Server uns, wo die Datei liegt
+            // Wenn device_id fehlt (lokale Suche), nehmen wir das aktuelle Gerät.
             final sourceDevice = f['device_id'] ?? currentDeviceId;
             
             return VfsNode(
               name: f['name'],
               path: f['path'],
               deviceId: sourceDevice, 
-              deviceName: sourceDevice == currentDeviceId ? currentDeviceName : "Remote ($sourceDevice)",
+              // Schöner Name für die Anzeige ("Remote" oder echter Name)
+              deviceName: sourceDevice == currentDeviceId ? currentDeviceName : (sourceDevice == "SERVER" ? "QualityLink Core" : sourceDevice),
               isDirectory: f['is_directory'],
               size: f['size'] ?? 0,
               modified: f['modified'] ?? 0,
             );
           }).toList();
-        } else {
-          errorMessage = "SCAN FAILED: ${response.statusCode}";
-        }
+      } else {
+         errorMessage = "Search failed: ${response.statusCode}";
       }
+
     } catch (e) {
-      errorMessage = "SCAN ERROR: $e";
+      errorMessage = "Search Error: $e";
     } finally {
       _setLoading(false);
     }
