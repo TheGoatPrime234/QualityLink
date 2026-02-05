@@ -33,6 +33,7 @@ class VfsNode {
   final VfsNodeType type;
   bool isSelected = false;
 
+
   VfsNode({
     required this.name,
     required this.path,
@@ -96,7 +97,7 @@ class FileVaultController extends ChangeNotifier {
   String currentPath = "ROOT";
   String currentDeviceId = "";
   String currentDeviceName = "Network";
-  
+  VfsNodeType? activeFilter;
   // Suche
   String searchQuery = "";
   bool isSearching = false;
@@ -107,17 +108,38 @@ class FileVaultController extends ChangeNotifier {
 
   final String _serverUrl = serverBaseUrl;
 
+  List<VfsNode> get displayFiles {
+    List<VfsNode> results = files;
+
+    // 1. Lokale Suche (Filtert den Namen, wenn wir NICHT im Deep Search Modus sind)
+    // (Im Deep Search Modus sind 'files' schon die Suchergebnisse vom Server)
+    if (!isDeepSearchActive && searchQuery.isNotEmpty) {
+      results = files.where((node) => 
+        node.name.toLowerCase().contains(searchQuery.toLowerCase())
+      ).toList();
+    }
+
+    // 2. Typ-Filter anwenden (Das ist neu!)
+    if (activeFilter != null) {
+      results = results.where((node) => node.type == activeFilter).toList();
+    }
+
+    return results;
+  }
+
+  // NEU: Filter setzen oder löschen (Toggle)
+  void setFilter(VfsNodeType type) {
+    if (activeFilter == type) {
+      activeFilter = null; // Filter deaktivieren, wenn man nochmal draufklickt
+    } else {
+      activeFilter = type; // Filter aktivieren
+    }
+    notifyListeners();
+  }
+
   // WICHTIG: Die init Methode, die gefehlt hat!
   void init() {
     loadRoot();
-  }
-
-  List<VfsNode> get displayFiles {
-    if (isDeepSearchActive) return files; 
-    if (searchQuery.isEmpty) return files;
-    return files.where((node) => 
-      node.name.toLowerCase().contains(searchQuery.toLowerCase())
-    ).toList();
   }
 
   Future<void> loadRoot() async {
@@ -258,6 +280,7 @@ class FileVaultController extends ChangeNotifier {
     isSearching = !isSearching;
     if (!isSearching) {
       searchQuery = "";
+      activeFilter = null; // Filter resetten
       isDeepSearchActive = false;
       if (currentPath == "ROOT") loadRoot();
       else _loadRemotePath(currentDeviceId, currentPath);
@@ -507,7 +530,7 @@ class _FileVaultView extends StatelessWidget {
                 if (controller.errorMessage != null)
                    Container(
                      padding: const EdgeInsets.all(8),
-                     color: Colors.red.withOpacity(0.2), 
+                     color: Colors.red.withValues(alpha: 0.2), 
                      width: double.infinity,
                      child: Text(
                        controller.errorMessage!, 
@@ -585,7 +608,7 @@ class _FileVaultView extends StatelessWidget {
 
     return Container(
       padding: const EdgeInsets.only(top: 50, bottom: 10, left: 10, right: 10),
-      color: AppColors.card.withOpacity(0.5),
+      color: AppColors.card.withValues(alpha: 0.5),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -624,9 +647,17 @@ class _FileVaultView extends StatelessWidget {
   }
 
   Widget _buildSearchBar(BuildContext context, FileVaultController controller) {
+    final filters = [
+      {'type': VfsNodeType.image, 'label': 'IMG', 'icon': Icons.image},
+      {'type': VfsNodeType.video, 'label': 'MOV', 'icon': Icons.movie},
+      {'type': VfsNodeType.audio, 'label': 'AUD', 'icon': Icons.graphic_eq},
+      {'type': VfsNodeType.document, 'label': 'DOC', 'icon': Icons.description},
+      {'type': VfsNodeType.code, 'label': 'DEV', 'icon': Icons.code},
+      {'type': VfsNodeType.archive, 'label': 'ZIP', 'icon': Icons.inventory_2},
+    ];
     return Container(
       padding: const EdgeInsets.only(top: 50, bottom: 10, left: 16, right: 16),
-      color: AppColors.card.withOpacity(0.8),
+      color: AppColors.card.withValues(alpha: 0.9),
       child: Column(
         children: [
           TechCard(
@@ -669,11 +700,62 @@ class _FileVaultView extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
+          SizedBox(
+            height: 32,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: filters.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final f = filters[index];
+                final type = f['type'] as VfsNodeType;
+                final isActive = controller.activeFilter == type;
+                final color = isActive ? AppColors.accent : Colors.grey;
+
+                return GestureDetector(
+                  onTap: () => controller.setFilter(type),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                    decoration: BoxDecoration(
+                      color: isActive ? AppColors.accent.withOpacity(0.2) : Colors.transparent,
+                      border: Border.all(
+                        color: isActive ? AppColors.accent : Colors.grey.withOpacity(0.3)
+                      ),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(f['icon'] as IconData, size: 14, color: color),
+                        const SizedBox(width: 6),
+                        Text(
+                          f['label'] as String,
+                          style: TextStyle(
+                            color: color, 
+                            fontWeight: FontWeight.bold, 
+                            fontSize: 12
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+
+          const SizedBox(height: 8),
+          
+          // 3. Ergebnis-Zähler
           Align(
             alignment: Alignment.centerRight,
             child: Text(
-              "${controller.displayFiles.length} MATCHES",
-              style: const TextStyle(color: AppColors.primary, fontSize: 10, fontWeight: FontWeight.bold),
+              "${controller.displayFiles.length} NODES FOUND",
+              style: TextStyle(
+                color: controller.activeFilter != null ? AppColors.accent : AppColors.primary, 
+                fontSize: 10, 
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.5
+              ),
             ),
           ),
         ],
@@ -688,8 +770,8 @@ class _FileVaultView extends StatelessWidget {
         borderColor: node.isSelected 
             ? AppColors.primary 
             : node.type == VfsNodeType.folder 
-                ? AppColors.accent.withOpacity(0.3) 
-                : Colors.white.withOpacity(0.05),
+                ? AppColors.accent.withValues(alpha: 0.3) 
+                : Colors.white.withValues(alpha: 0.05),
         
         onTap: () {
           if (controller.isSelectionMode) {
@@ -709,9 +791,9 @@ class _FileVaultView extends StatelessWidget {
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: node.color.withOpacity(0.1),
+                color: node.color.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: node.color.withOpacity(0.3)),
+                border: Border.all(color: node.color.withValues(alpha: 0.3)),
               ),
               child: Icon(node.icon, color: node.color, size: 20),
             ),
