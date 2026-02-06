@@ -324,8 +324,18 @@ class FileVaultController extends ChangeNotifier {
       searchQuery = "";
       activeFilter = null; // Filter resetten
       isDeepSearchActive = false;
-      if (currentPath == "ROOT") loadRoot();
-      else _loadRemotePath(currentDeviceId, currentPath);
+      
+      if (currentPath == "ROOT") {
+          // Wir sind ganz oben bei der Geräte-Auswahl
+          loadRoot();
+      } else if (currentPath == "Drives") {
+          // FIX: Wenn wir im Start-Ordner eines Geräts sind, laden wir die Pfade neu!
+          // Wir übergeben 'null', damit _loadRemotePath den Endpunkt /files/paths aufruft.
+          _loadRemotePath(currentDeviceId, null); 
+      } else {
+          // Wir sind in einem Unterordner -> Ordner neu laden
+          _loadRemotePath(currentDeviceId, currentPath);
+      }
     }
     notifyListeners();
   }
