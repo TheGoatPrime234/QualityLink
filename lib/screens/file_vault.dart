@@ -21,6 +21,7 @@ import '../ui/scifi_background.dart';
 // 1. VFS MODEL
 // =============================================================================
 enum VfsNodeType { folder, drive, image, video, audio, code, archive, document, unknown }
+enum SortOption { name, date, size, type }
 
 class VfsNode {
   final String name;
@@ -102,6 +103,9 @@ class FileVaultController extends ChangeNotifier {
   String searchQuery = "";
   bool isSearching = false;
   bool isDeepSearchActive = false;
+
+  SortOption currentSort = SortOption.name; // ✅ Hier gehören sie hin!
+  bool sortAscending = true;
   
   List<VfsNode> files = [];
   List<Map<String, String>> history = [];
@@ -111,20 +115,58 @@ class FileVaultController extends ChangeNotifier {
   List<VfsNode> get displayFiles {
     List<VfsNode> results = files;
 
-    // 1. Lokale Suche (Filtert den Namen, wenn wir NICHT im Deep Search Modus sind)
-    // (Im Deep Search Modus sind 'files' schon die Suchergebnisse vom Server)
+    // A. Filter (Suche & Typ)
     if (!isDeepSearchActive && searchQuery.isNotEmpty) {
       results = files.where((node) => 
         node.name.toLowerCase().contains(searchQuery.toLowerCase())
       ).toList();
     }
-
-    // 2. Typ-Filter anwenden (Das ist neu!)
     if (activeFilter != null) {
       results = results.where((node) => node.type == activeFilter).toList();
     }
 
+    // B. Sortierung (NEU!)
+    // Wir kopieren die Liste, damit wir nicht die Original-Reihenfolge zerstören
+    results = List.from(results);
+    
+    results.sort((a, b) {
+      int cmp = 0;
+      switch (currentSort) {
+        case SortOption.name:
+          cmp = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          break;
+        case SortOption.date:
+          cmp = a.modified.compareTo(b.modified);
+          break;
+        case SortOption.size:
+          cmp = a.size.compareTo(b.size);
+          break;
+        case SortOption.type:
+          cmp = a.type.index.compareTo(b.type.index);
+          break;
+      }
+      // Drehrichtung beachten
+      return sortAscending ? cmp : -cmp;
+    });
+
     return results;
+  }
+
+  void changeSort(SortOption option) {
+    if (currentSort == option) {
+      // Gleiche Option geklickt -> Richtung umkehren
+      sortAscending = !sortAscending;
+    } else {
+      // Neue Option -> Standardrichtung setzen
+      currentSort = option;
+      // Bei Datum und Größe will man meistens "Größte/Neueste zuerst" (also Absteigend)
+      if (option == SortOption.date || option == SortOption.size) {
+        sortAscending = false; 
+      } else {
+        sortAscending = true; // Bei Name A-Z
+      }
+    }
+    notifyListeners();
   }
 
   // NEU: Filter setzen oder löschen (Toggle)
@@ -572,13 +614,61 @@ class _FileVaultView extends StatelessWidget {
     );
   }
 
+  void _showSortMenu(BuildContext context, FileVaultController controller) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: AppColors.card.withOpacity(0.95),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          border: Border(top: BorderSide(color: AppColors.primary.withOpacity(0.5))),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "SORT SYSTEM NODES", 
+              style: TextStyle(
+                color: AppColors.primary, 
+                fontWeight: FontWeight.bold, 
+                letterSpacing: 2
+              )
+            ),
+            const SizedBox(height: 20),
+            _buildSortOption(ctx, controller, "NAME (A-Z)", SortOption.name, Icons.sort_by_alpha),
+            _buildSortOption(ctx, controller, "DATE (TIME)", SortOption.date, Icons.calendar_today),
+            _buildSortOption(ctx, controller, "SIZE (BYTES)", SortOption.size, Icons.data_usage),
+            _buildSortOption(ctx, controller, "TYPE (FORMAT)", SortOption.type, Icons.category),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSortOption(BuildContext ctx, FileVaultController ctrl, String label, SortOption opt, IconData icon) {
+    final isSelected = ctrl.currentSort == opt;
+    return ListTile(
+      leading: Icon(icon, color: isSelected ? AppColors.accent : Colors.grey),
+      title: Text(label, style: TextStyle(color: isSelected ? Colors.white : Colors.grey, fontFamily: 'Rajdhani', fontWeight: FontWeight.bold)),
+      trailing: isSelected 
+        ? Icon(ctrl.sortAscending ? Icons.arrow_upward : Icons.arrow_downward, color: AppColors.accent)
+        : null,
+      onTap: () {
+        ctrl.changeSort(opt);
+        Navigator.pop(ctx);
+      },
+    );
+  }
+
   Widget _buildHeader(BuildContext context, FileVaultController controller) {
     if (controller.isSearching) {
       return _buildSearchBar(context, controller);
     }
-
     List<Widget> breadcrumbs = [];
-    
     breadcrumbs.add(
       Padding(
         padding: const EdgeInsets.only(right: 4),
@@ -591,7 +681,6 @@ class _FileVaultView extends StatelessWidget {
         ),
       )
     );
-
     if (controller.currentPath != "ROOT") {
        breadcrumbs.add(
         Padding(
@@ -605,7 +694,6 @@ class _FileVaultView extends StatelessWidget {
         )
       );
     }
-
     return Container(
       padding: const EdgeInsets.only(top: 50, bottom: 10, left: 10, right: 10),
       color: AppColors.card.withValues(alpha: 0.5),
@@ -619,6 +707,10 @@ class _FileVaultView extends StatelessWidget {
                   scrollDirection: Axis.horizontal,
                   child: Row(children: breadcrumbs),
                 ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.sort, color: AppColors.accent), // <-- NEU
+                onPressed: () => _showSortMenu(context, controller),
               ),
               IconButton(
                 icon: const Icon(Icons.search, color: AppColors.primary),
@@ -692,6 +784,12 @@ class _FileVaultView extends StatelessWidget {
                     icon: const Icon(Icons.refresh, color: AppColors.warning),
                     onPressed: () => controller.performDeepSearch(controller.searchQuery),
                    ),
+                
+                IconButton( // <-- NEU: Auch hier sortieren können!
+                  icon: const Icon(Icons.sort, color: AppColors.accent),
+                  onPressed: () => _showSortMenu(context, controller),
+                ),
+
                 IconButton(
                   icon: const Icon(Icons.close, color: AppColors.warning),
                   onPressed: () => controller.toggleSearch(),
