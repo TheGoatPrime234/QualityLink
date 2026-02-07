@@ -245,6 +245,31 @@ class DataLinkService {
         }
       }
     }
+    else if (action == 'request_transfer') {
+      final path = params['path'];
+      final requesterId = params['requester_id'];
+      
+      if (path != null && requesterId != null) {
+        print("📤 Received download request for $path from $requesterId");
+        
+        final file = File(path);
+        if (await file.exists()) {
+          // Wir starten den Transfer AN den Anforderer (Rückwärts-Transfer)
+          await sendFile(file, [requesterId]);
+          
+          // Bestätigung senden
+          _sendToWebSocket({
+            "event": "command_result",
+            "target_id": senderId,
+            "status": "success",
+            "action": "request_transfer",
+            "details": "Transfer started"
+          });
+        } else {
+           print("❌ File not found for transfer request: $path");
+        }
+      }
+    }
   }
   
   // Hilfsmethode um WS Nachrichten zu senden (falls noch nicht vorhanden)

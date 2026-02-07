@@ -9,6 +9,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:http/http.dart' as http;
+import 'package:file_picker/file_picker.dart';
+import '../services/data_link_service.dart';
 
 // Deine Imports (Lasse diese so, wie sie in deinem Projekt sind)
 import '../config/server_config.dart';
@@ -103,6 +105,8 @@ class FileVaultController extends ChangeNotifier {
   String searchQuery = "";
   bool isSearching = false;
   bool isDeepSearchActive = false;
+  String myClientId = "";
+  String myDeviceName = "";
 
   SortOption currentSort = SortOption.name; // ✅ Hier gehören sie hin!
   bool sortAscending = true;
@@ -152,6 +156,12 @@ class FileVaultController extends ChangeNotifier {
     return results;
   }
 
+  void init(String id, String name) {
+    myClientId = id;
+    myDeviceName = name;
+    loadRoot();
+  }
+
   void changeSort(SortOption option) {
     if (currentSort == option) {
       // Gleiche Option geklickt -> Richtung umkehren
@@ -169,6 +179,81 @@ class FileVaultController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> downloadSelection() async {
+    if (selectedNodes.isEmpty) return;
+    _setLoading(true);
+
+    int count = 0;
+    for (var node in selectedNodes) {
+      if (node.isDirectory) continue; // Ordner-Download erst in V2
+
+      try {
+        if (node.deviceId == myClientId) {
+           // Datei ist schon lokal -> Nichts tun oder öffnen
+           print("File is already local.");
+        } else {
+           // Wir senden dem Remote-Gerät den Befehl: "Schick mir das!"
+           await _sendCommandToRelay("request_transfer", {
+             "path": node.path,
+             "requester_id": myClientId // WICHTIG: Damit er weiß wohin!
+           });
+           count++;
+        }
+      } catch (e) {
+        errorMessage = "Download Request Failed: $e";
+      }
+    }
+    
+    clearSelection();
+    _setLoading(false);
+    
+    if (count > 0) {
+      // Kleiner Hack: Wir zeigen kurz eine Meldung via ErrorMessage (oder Snackbar im View)
+      errorMessage = "REQUESTED $count DOWNLOADS via DATALINK";
+      Future.delayed(const Duration(seconds: 2), () => errorMessage = null);
+    }
+  }
+
+  // ✅ 2. UPLOAD (PUT)
+  Future<void> uploadFile() async {
+    // Check: Wohin soll es gehen?
+    if (currentDeviceId.isEmpty || currentDeviceId == myClientId) {
+      errorMessage = "SELECT A REMOTE FOLDER FIRST";
+      return;
+    }
+
+    try {
+      // Datei auswählen
+      FilePickerResult? result = await FilePicker.platform.pickFiles(allowMultiple: true);
+
+      if (result != null) {
+        _setLoading(true);
+        List<File> files = result.paths.map((path) => File(path!)).toList();
+        
+        // Zielpfad bestimmen (wo wir gerade im Vault sind)
+        String destination = (currentPath == "ROOT" || currentPath == "Drives") 
+            ? "" // Root ist ungültig, DataLink nimmt dann Default Download Folder
+            : currentPath;
+
+        print("🚀 Uploading ${files.length} files to $currentDeviceId at $destination");
+
+        // Via DataLink senden (mit Zielpfad!)
+        await DataLinkService().sendFiles(
+          files, 
+          [currentDeviceId], 
+          destinationPath: destination // Das haben wir im DataLinkService schon vorbereitet!
+        );
+        
+        _setLoading(false);
+        // Refresh, damit wir die neuen Dateien sehen (nach kurzer Zeit)
+        Future.delayed(const Duration(seconds: 2), () => _loadRemotePath(currentDeviceId, currentPath));
+      }
+    } catch (e) {
+      _setLoading(false);
+      errorMessage = "Upload Failed: $e";
+    }
+  }
+
   // NEU: Filter setzen oder löschen (Toggle)
   void setFilter(VfsNodeType type) {
     if (activeFilter == type) {
@@ -177,11 +262,6 @@ class FileVaultController extends ChangeNotifier {
       activeFilter = type; // Filter aktivieren
     }
     notifyListeners();
-  }
-
-  // WICHTIG: Die init Methode, die gefehlt hat!
-  void init() {
-    loadRoot();
   }
 
   Future<void> loadRoot() async {
@@ -533,14 +613,21 @@ class FileVaultController extends ChangeNotifier {
 // =============================================================================
 
 class NetworkStorageScreen extends StatelessWidget {
-  const NetworkStorageScreen({super.key});
+  final String myClientId;     // NEU
+  final String myDeviceName;
+  const NetworkStorageScreen({
+    super.key, 
+    required this.myClientId, 
+    required this.myDeviceName
+  });
 
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
       create: (_) {
         final controller = FileVaultController();
-        controller.init(); // Jetzt funktioniert das, weil "init()" oben existiert!
+        // Wir übergeben die eigene ID an den Controller
+        controller.init(myClientId, myDeviceName); 
         return controller;
       },
       child: const _FileVaultView(),
@@ -717,6 +804,11 @@ class _FileVaultView extends StatelessWidget {
                   scrollDirection: Axis.horizontal,
                   child: Row(children: breadcrumbs),
                 ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.upload_file, color: AppColors.primary),
+                onPressed: () => controller.uploadFile(),
+                tooltip: "UPLOAD HERE",
               ),
               IconButton(
                 icon: const Icon(Icons.sort, color: AppColors.accent), // <-- NEU
@@ -957,7 +1049,7 @@ class _FileVaultView extends StatelessWidget {
           _buildActionButton(Icons.close, "CANCEL", () => controller.clearSelection()),
           _buildActionButton(Icons.copy, "COPY", () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Not implemented")))),
           _buildActionButton(Icons.drive_file_move, "MOVE", () {}),
-          _buildActionButton(Icons.download, "GET", () {}),
+          _buildActionButton(Icons.download, "GET", () => controller.downloadSelection()),
           _buildActionButton(Icons.delete, "DEL", () => controller.deleteNodes(), isDanger: true),
         ],
       ),

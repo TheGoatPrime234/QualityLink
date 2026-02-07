@@ -176,7 +176,8 @@ class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingOb
     final List<Widget> screens = [
       DataLinkScreen(clientId: _myClientId, deviceName: _myDeviceName),
       SharedClipboardScreen(clientId: _myClientId, deviceName: _myDeviceName),
-      const NetworkStorageScreen(),
+      // UPDATE: Wir geben die ID und den Namen weiter!
+      NetworkStorageScreen(myClientId: _myClientId, myDeviceName: _myDeviceName),
       const SystemMonitorScreen(),
     ];
 
