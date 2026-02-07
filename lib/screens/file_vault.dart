@@ -101,12 +101,15 @@ class FileVaultController extends ChangeNotifier {
   String currentDeviceId = "";
   String currentDeviceName = "Network";
   VfsNodeType? activeFilter;
+  
   // Suche
   String searchQuery = "";
   bool isSearching = false;
   bool isDeepSearchActive = false;
   String myClientId = "";
   String myDeviceName = "";
+  List<VfsNode> _clipboardNodes = [];
+  bool _isMoveOperation = false;
 
   SortOption currentSort = SortOption.name; // ✅ Hier gehören sie hin!
   bool sortAscending = true;
@@ -179,29 +182,92 @@ class FileVaultController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void copySelection() {
+    _clipboardNodes = List.from(selectedNodes);
+    _isMoveOperation = false;
+    clearSelection();
+    notifyListeners(); // UI Update (vielleicht "Paste" Button anzeigen?)
+  }
+
+  void cutSelection() {
+    _clipboardNodes = List.from(selectedNodes);
+    _isMoveOperation = true;
+    clearSelection();
+    notifyListeners();
+  }
+
+  bool get canPaste => _clipboardNodes.isNotEmpty;
+
+  Future<void> pasteFiles() async {
+    if (_clipboardNodes.isEmpty) return;
+    
+    // Ziel ist aktueller Ordner (außer wir sind im Root)
+    if (currentPath == "ROOT" || currentPath == "Drives") {
+      errorMessage = "Cannot paste here.";
+      return;
+    }
+
+    _setLoading(true);
+    final action = _isMoveOperation ? "move" : "copy";
+
+    for (var node in _clipboardNodes) {
+      try {
+        // Gleiches Gerät? -> Remote Befehl
+        if (node.deviceId == currentDeviceId) {
+          await _sendCommandToRelay(action, {
+            "path": node.path,
+            "destination": currentPath
+          });
+        } 
+        // Anderes Gerät? -> Cross-Device Transfer (Upload)
+        else {
+           // Das ist komplexer (Phase 4). Für jetzt: Nur Meldung.
+           errorMessage = "Cross-device copy not yet supported (use Download/Upload)";
+        }
+      } catch (e) {
+        errorMessage = "Paste Failed: $e";
+      }
+    }
+
+    // Wenn es Move war, Clipboard leeren
+    if (_isMoveOperation) _clipboardNodes.clear();
+    
+    // Kurz warten und refresh
+    await Future.delayed(const Duration(seconds: 1));
+    _setLoading(false);
+    _loadRemotePath(currentDeviceId, currentPath);
+  }
+
   Future<void> downloadSelection() async {
     if (selectedNodes.isEmpty) return;
     _setLoading(true);
 
     int count = 0;
     for (var node in selectedNodes) {
-      if (node.isDirectory) continue; // Ordner-Download erst in V2
-
+      // WICHTIG: "if (node.isDirectory) continue;" ENTFERNEN wir jetzt!
+      // Der DataLinkService kann jetzt Ordner zippen!
+      
       try {
         if (node.deviceId == myClientId) {
-           // Datei ist schon lokal -> Nichts tun oder öffnen
            print("File is already local.");
         } else {
-           // Wir senden dem Remote-Gerät den Befehl: "Schick mir das!"
            await _sendCommandToRelay("request_transfer", {
              "path": node.path,
-             "requester_id": myClientId // WICHTIG: Damit er weiß wohin!
+             "requester_id": myClientId 
            });
            count++;
         }
       } catch (e) {
         errorMessage = "Download Request Failed: $e";
       }
+    }
+    
+    clearSelection();
+    _setLoading(false);
+    
+    if (count > 0) {
+      errorMessage = "REQUESTED $count ITEMS via DATALINK";
+      Future.delayed(const Duration(seconds: 2), () => errorMessage = null);
     }
     
     clearSelection();
@@ -696,11 +762,11 @@ class _FileVaultView extends StatelessWidget {
                 ),
               ],
             ),
-
             AnimatedPositioned(
               duration: const Duration(milliseconds: 300),
               curve: Curves.easeOutExpo,
-              bottom: controller.isSelectionMode ? 20 : -100,
+              // ✅ FIX: Zeige Leiste auch an, wenn wir etwas einfügen können!
+              bottom: (controller.isSelectionMode || controller.canPaste) ? 20 : -100,
               left: 20,
               right: 20,
               child: _buildActionBar(context, controller),
@@ -1041,15 +1107,41 @@ class _FileVaultView extends StatelessWidget {
   }
 
   Widget _buildActionBar(BuildContext context, FileVaultController controller) {
+    // Wenn wir was im Clipboard haben, zeigen wir PASTE anstelle der normalen Actions
+    if (controller.canPaste && !controller.isSelectionMode) {
+       return TechCard(
+        borderColor: AppColors.accent,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _buildActionButton(Icons.close, "CLEAR CLIPBOARD", () {
+               controller._clipboardNodes.clear(); // Quick hack, besser Methode im Controller
+               controller.notifyListeners();
+            }, isDanger: true),
+            
+            _buildActionButton(Icons.content_paste, "PASTE HERE", () => controller.pasteFiles()),
+          ],
+        ),
+      );
+    }
+
     return TechCard(
       borderColor: AppColors.primary,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
           _buildActionButton(Icons.close, "CANCEL", () => controller.clearSelection()),
-          _buildActionButton(Icons.copy, "COPY", () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Not implemented")))),
-          _buildActionButton(Icons.drive_file_move, "MOVE", () {}),
+          
+          // COPY
+          _buildActionButton(Icons.copy, "COPY", () => controller.copySelection()),
+          
+          // MOVE (CUT)
+          _buildActionButton(Icons.drive_file_move, "MOVE", () => controller.cutSelection()),
+          
+          // GET (Download)
           _buildActionButton(Icons.download, "GET", () => controller.downloadSelection()),
+          
+          // DELETE
           _buildActionButton(Icons.delete, "DEL", () => controller.deleteNodes(), isDanger: true),
         ],
       ),

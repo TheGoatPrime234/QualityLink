@@ -208,6 +208,8 @@ class DataLinkService {
   }
 
   // ✅ NEUE METHODE: Führt Befehle vom Server aus
+  // In lib/services/data_link_service.dart
+
   Future<void> _handleRemoteCommand(Map<String, dynamic> data) async {
     final action = data['action'];
     final params = data['params'];
@@ -215,60 +217,106 @@ class DataLinkService {
 
     print("🤖 Executing remote command: $action");
 
-    if (action == 'delete') {
-      final path = params['path'];
-      if (path != null) {
-        try {
+    try {
+      // 1. LÖSCHEN
+      if (action == 'delete') {
+        final path = params['path'];
+        if (path != null) {
           final entity = File(path);
           if (await entity.exists()) {
             await entity.delete();
-            print("🗑️ File deleted: $path");
           } else {
             final dir = Directory(path);
-            if (await dir.exists()) {
-              await dir.delete(recursive: true);
-              print("🗑️ Folder deleted: $path");
-            }
+            if (await dir.exists()) await dir.delete(recursive: true);
           }
+          print("🗑️ Deleted: $path");
+        }
+      } 
+      // 2. UMBENENNEN
+      else if (action == 'rename') {
+        final path = params['path'];
+        final newName = params['new_name'];
+        if (path != null && newName != null) {
+          final file = File(path);
+          final dir = Directory(path);
+          String newPath = p.join(p.dirname(path), newName);
           
-          // Optional: Erfolgsmeldung zurück an Server senden (für Phase 3)
-          _sendToWebSocket({
-            "event": "command_result",
-            "target_id": senderId,
-            "status": "success",
-            "action": "delete",
-            "path": path
-          });
-          
-        } catch (e) {
-          print("❌ Delete failed: $e");
+          if (await file.exists()) {
+            await file.rename(newPath);
+          } else if (await dir.exists()) {
+            await dir.rename(newPath);
+          }
+          print("✏️ Renamed to: $newPath");
         }
       }
-    }
-    else if (action == 'request_transfer') {
-      final path = params['path'];
-      final requesterId = params['requester_id'];
-      
-      if (path != null && requesterId != null) {
-        print("📤 Received download request for $path from $requesterId");
+      // 3. KOPIEREN (Lokal)
+      else if (action == 'copy') {
+        final path = params['path'];
+        final destination = params['destination'];
+        if (path != null && destination != null) {
+          final file = File(path);
+          if (await file.exists()) {
+            final fileName = p.basename(path);
+            // Verhindere Überschreiben durch "_copy" Suffix falls nötig
+            String newPath = p.join(destination, fileName);
+            if (await File(newPath).exists()) {
+               final name = p.basenameWithoutExtension(fileName);
+               final ext = p.extension(fileName);
+               newPath = p.join(destination, "${name}_copy$ext");
+            }
+            await file.copy(newPath);
+            print("©️ Copied to: $newPath");
+          }
+        }
+      }
+      // 4. VERSCHIEBEN (Lokal)
+      else if (action == 'move') {
+        final path = params['path'];
+        final destination = params['destination'];
+        if (path != null && destination != null) {
+          final file = File(path);
+          final dir = Directory(path);
+          final fileName = p.basename(path);
+          final newPath = p.join(destination, fileName);
+          
+          if (await file.exists()) {
+            await file.rename(newPath); 
+          } else if (await dir.exists()) {
+            await dir.rename(newPath);
+          }
+          print("🚚 Moved to: $newPath");
+        }
+      }
+      // 5. TRANSFER REQUEST (Download mit Ordner-Support!)
+      else if (action == 'request_transfer') {
+        final path = params['path'];
+        final requesterId = params['requester_id'];
         
-        final file = File(path);
-        if (await file.exists()) {
-          // Wir starten den Transfer AN den Anforderer (Rückwärts-Transfer)
-          await sendFile(file, [requesterId]);
+        if (path != null && requesterId != null) {
+          print("📤 Handling transfer request for $path");
           
-          // Bestätigung senden
-          _sendToWebSocket({
-            "event": "command_result",
-            "target_id": senderId,
-            "status": "success",
-            "action": "request_transfer",
-            "details": "Transfer started"
-          });
-        } else {
-           print("❌ File not found for transfer request: $path");
+          if (await File(path).exists()) {
+            // Einzeldatei
+            await sendFile(File(path), [requesterId]);
+          } else if (await Directory(path).exists()) {
+            // ORDNER: Zippen und senden!
+            await sendFolder(Directory(path), [requesterId]);
+          } else {
+             print("❌ Item not found: $path");
+          }
         }
       }
+      
+      // Feedback senden (Optional für später)
+      _sendToWebSocket({
+        "event": "command_result",
+        "target_id": senderId,
+        "status": "success",
+        "action": action
+      });
+
+    } catch (e) {
+      print("❌ Command '$action' failed: $e");
     }
   }
   
