@@ -687,28 +687,43 @@ class DataLinkService {
   // RECEIVE & DOWNLOAD LOGIC
   // =============================================================================
 
-  Future<void> _handleOfferedTransfer(Transfer transfer, String downloadPath) async {
-    _processedTransferIds.add(transfer.id);
+  Future<void> _handleOfferedTransfer(Transfer t, String path) async {
+    _processedTransferIds.add(t.id);
     
-    File targetFile;
-    if (transfer.destinationPath != null && transfer.destinationPath!.isNotEmpty) {
-      targetFile = File(p.join(transfer.destinationPath!, transfer.fileName));
-    } else {
-      targetFile = File(p.join(downloadPath, transfer.fileName));
-    }
+    // Zielpfad bestimmen
+    File target = File(p.join(t.destinationPath ?? path, t.fileName));
     
-    _notifyMessage("📥 Incoming: ${transfer.fileName}");
-    
-    final p2pSuccess = await _tryP2PDownload(transfer, targetFile);
+    // Versuch 1: P2P Download
+    bool p2pSuccess = await _tryP2PDownload(t, target);
     
     if (p2pSuccess) {
-      _notifyMessage("✨ P2P Success: ${transfer.fileName}");
-      _updateTransferStatus(transfer, TransferStatus.completed);
-      await _reportTransferEvent(transfer.id, "completed", "via P2P");
+      _reportTransferEvent(t.id, "completed", "P2P");
+      _updateTransferStatus(t, TransferStatus.completed);
+      _notifyMessage("✨ P2P Success: ${t.fileName}");
     } else {
-      _notifyMessage("⚠️ P2P failed, requesting relay...");
-      await _requestRelay(transfer.id, targetFile.path);
-      _processedTransferIds.remove(transfer.id);
+      // P2P FEHLGESCHLAGEN
+      _notifyMessage("⚠️ P2P failed via Mobile/Remote. Requesting Sender Relay...");
+      
+      // 🛑 STOP! Wir laden NICHT hoch (wir haben die Datei ja nicht).
+      // Wir bitten den Server, dem SENDER Bescheid zu sagen.
+      await _requestRelayFromSender(t.id);
+      
+      // Wir entfernen die ID aus "processed", damit wir später das Relay-Update akzeptieren
+      _processedTransferIds.remove(t.id);
+    }
+  }
+
+  // Neue Hilfsmethode: Fordert den Sender auf, das Relay zu nutzen
+  Future<void> _requestRelayFromSender(String transferId) async {
+    try {
+      await http.post(
+        Uri.parse('$serverBaseUrl/transfer/request_relay'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({"transfer_id": transferId}),
+      );
+      print("📡 Sent Relay Request to Server (waiting for Sender upload)");
+    } catch (e) {
+      print("❌ Failed to request relay: $e");
     }
   }
 
@@ -800,17 +815,28 @@ class DataLinkService {
   }
 
   Future<void> _monitorSenderTasks() async {
+    // Wir schauen uns alle Transfers an, die wir gerade versenden ("activeOperations")
     for (var transferId in _activeOperations.keys.toList()) {
       try {
         final response = await http.get(Uri.parse('$serverBaseUrl/transfer/status/$transferId'));
+        
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
+          
+          // Wenn der Status "RELAY_REQUESTED" ist, heißt das:
+          // Der Empfänger hat gesagt "P2P geht nicht, bitte lad hoch!"
           if (data['status'] == "RELAY_REQUESTED" && !_isProcessing) {
+            print("🚀 Empfänger hat Relay angefordert. Starte Upload...");
+            
             final filePath = _activeOperations[transferId]!;
+            
+            // JETZT laden wir hoch (wir sind ja der Sender!)
             await _uploadToRelay(filePath, transferId);
           }
         }
-      } catch (e) {}
+      } catch (e) {
+        // Fehler ignorieren, nächster Check kommt bald
+      }
     }
   }
 
