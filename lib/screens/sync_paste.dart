@@ -15,9 +15,6 @@ import '../ui/theme_constants.dart';
 import '../ui/tech_card.dart';
 import '../ui/parallelogram_button.dart';
 
-// =============================================================================
-// SHARED CLIPBOARD SCREEN (Enhanced with HeartbeatService Integration)
-// =============================================================================
 class SharedClipboardScreen extends StatefulWidget {
   final String clientId;
   final String deviceName;
@@ -65,11 +62,9 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
     super.dispose();
   }
 
-  // ✅ Verbessert: Sofort-Check bei App-Resume
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      print("📱 App resumed: Checking clipboard immediately...");
       _checkLocalClipboard(); 
       _pullFromServer();
     }
@@ -125,9 +120,6 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
     }
   }
 
-  // ===========================================================================
-  // CLIPBOARD MONITORING
-  // ===========================================================================
   void _startClipboardMonitor() {
     _clipboardMonitor = Timer.periodic(const Duration(seconds: 1), (t) async {
       if (!_autoSync) return;
@@ -142,7 +134,6 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
       
       if (content != null && content.isNotEmpty) {
         if (content != _lastClipboardContent && content != _lastReceivedContent) {
-          print("📋 New local content detected: ${content.substring(0, content.length > 20 ? 20 : content.length)}...");
           _lastClipboardContent = content;
           await _pushToServer(content);
         }
@@ -201,12 +192,10 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
                 .toList();
           });
           
-          // AUTO-COPY LOGIC
           if (_autoCopyMode && entries.isNotEmpty) {
             final newest = entries.first;
             if (newest['client_id'] != widget.clientId) {
               final content = newest['content'] as String;
-              
               if (content != _lastReceivedContent && content != _lastClipboardContent) {
                 await _autoCopyToClipboard(content);
               }
@@ -230,20 +219,17 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
     _lastClipboardContent = content;
     
     await Clipboard.setData(ClipboardData(text: content));
-    print("📄 Auto-copied from cloud");
-    
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text("📥 Copied from cloud"),
           duration: Duration(seconds: 1),
-          backgroundColor: Color(0xFF00FF41),
+          backgroundColor: AppColors.primary,
         ),
       );
     }
   }
 
-  // --- USER ACTIONS ---
   Future<void> _copyToClipboard(String content) async {
     _lastReceivedContent = content;
     _lastClipboardContent = content;
@@ -253,7 +239,7 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
         const SnackBar(
           content: Text("📋 Copied!"),
           duration: Duration(seconds: 1),
-          backgroundColor: Color(0xFF00FF41),
+          backgroundColor: AppColors.primary,
         ),
       );
     }
@@ -279,14 +265,13 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(msg),
-          backgroundColor: isError ? Colors.red : const Color(0xFF00FF41).withValues(alpha: 0.3),
+          backgroundColor: isError ? AppColors.warning : AppColors.primary.withValues(alpha: 0.3),
           duration: const Duration(seconds: 2),
         ),
       );
     }
   }
 
-  // --- FILTERING ---
   List<dynamic> get _filteredEntries {
     if (_selectedDeviceFilter == "all") return _clipboardEntries;
     return _clipboardEntries.where((e) => e['client_id'] == _selectedDeviceFilter).toList();
@@ -300,18 +285,14 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
     return entry['client_name'];
   }
 
-  // ===========================================================================
-  // UI BUILD
-  // ===========================================================================
-@override
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.transparent, // Transparent für SciFiBackground
-      // KEINE AppBar mehr hier!
+      backgroundColor: Colors.transparent,
       body: SafeArea(
         child: Column(
           children: [
-            // 1. NEUER HEADER (Wie bei DataLink)
+            // 1. HEADER (Cleaned up, no buttons)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
@@ -332,24 +313,14 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
                           : null,
                     ),
                   ),
+                  
+                  // SPACER sorgt dafür, dass rechts ALLES leer bleibt für das App Icon
                   const Spacer(),
-                  // Sync Button (war vorher in der AppBar)
-                  IconButton(
-                    icon: Icon(
-                      _autoSync ? Icons.sync : Icons.sync_disabled,
-                      color: _autoSync ? AppColors.primary : Colors.grey,
-                    ),
-                    onPressed: () {
-                      setState(() => _autoSync = !_autoSync);
-                      _saveSettings();
-                    },
-                    tooltip: "Auto-Sync Toggle",
-                  ),
                 ],
               ),
             ),
 
-            // 2. INFO HEADER (TechCard) - bleibt gleich
+            // 2. INFO HEADER (TechCard) - ✅ UMBAU: Zwei Switches untereinander
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: TechCard(
@@ -365,31 +336,48 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
                       ],
                     ),
                     const Divider(color: Colors.white10),
+                    
+                    // ZEILE 1: Auto-Copy (mit Switch)
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Expanded(
-                          child: Text(
-                            _autoSync ? "AUTO-SYNC: ACTIVE" : "AUTO-SYNC: PAUSED",
-                            style: TextStyle(color: _autoSync ? AppColors.primary : Colors.grey, fontSize: 12, fontWeight: FontWeight.bold),
-                          ),
+                        const Text("AUTO-COPY MODE", style: TextStyle(color: AppColors.textDim, fontSize: 12)),
+                        Switch(
+                          value: _autoCopyMode,
+                          onChanged: (val) {
+                            setState(() => _autoCopyMode = val);
+                            _saveSettings();
+                          },
+                          activeColor: AppColors.primary,
+                          activeTrackColor: AppColors.primary.withValues(alpha: 0.3),
+                          inactiveThumbColor: Colors.grey,
+                          inactiveTrackColor: Colors.grey.withValues(alpha: 0.3),
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text("AUTO-COPY ", style: TextStyle(color: Colors.grey, fontSize: 12)),
-                            Switch(
-                              value: _autoCopyMode,
-                              onChanged: (val) {
-                                setState(() => _autoCopyMode = val);
-                                _saveSettings();
-                              },
-                              activeColor: AppColors.primary,
-                              activeTrackColor: AppColors.primary.withValues(alpha: 0.3),
-                              inactiveThumbColor: Colors.grey,
-                              inactiveTrackColor: Colors.grey.withValues(alpha: 0.3),
-                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            ),
-                          ],
+                      ],
+                    ),
+
+                    const SizedBox(height: 4),
+
+                    // ZEILE 2: Auto-Sync (JETZT AUCH EIN SWITCH)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                         Text(
+                          "AUTO-SYNC MODE", // Label vereinheitlicht
+                          style: TextStyle(color: _autoSync ? AppColors.primary : AppColors.textDim, fontSize: 12),
+                        ),
+                        Switch(
+                          value: _autoSync,
+                          onChanged: (val) {
+                            setState(() => _autoSync = val);
+                            _saveSettings();
+                          },
+                          activeColor: AppColors.primary,
+                          activeTrackColor: AppColors.primary.withValues(alpha: 0.3),
+                          inactiveThumbColor: Colors.grey,
+                          inactiveTrackColor: Colors.grey.withValues(alpha: 0.3),
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
                       ],
                     ),
@@ -398,8 +386,6 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
               ),
             ),
 
-            // ... (Rest bleibt gleich: Filter, Buttons, Liste) ...
-            
             // DROPDOWN FILTER
             if (_availableDevices.length > 1)
               Padding(
@@ -430,7 +416,7 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
                 ),
               ),
 
-            // ACTIONS
+            // ACTIONS (Parallelogram Buttons)
             Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -440,8 +426,8 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
                       text: "PUSH NOW",
                       icon: Icons.upload,
                       onTap: _manualPush,
-                      color: AppColors.accent,
-                      skew: 0.3, 
+                      color: AppColors.accent, // Türkis
+                      skew: 0.3, // Neigung nach Rechts
                     ),
                   ),
                   const SizedBox(width: 15),
@@ -451,7 +437,7 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
                       icon: Icons.delete_sweep,
                       onTap: _clearMyHistory,
                       color: AppColors.warning,
-                      skew: -0.3,
+                      skew: -0.3, // Neigung nach Links
                     ),
                   ),
                 ],
@@ -486,7 +472,6 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
     final isMyEntry = entry['client_id'] == widget.clientId;
     
     return TechCard(
-      // Eigene Einträge: Akzentfarbe, Andere: Standard Grau
       borderColor: isMyEntry ? AppColors.primary.withValues(alpha: 0.5) : Colors.white.withValues(alpha: 0.1),
       onTap: () => _copyToClipboard(content),
       child: Column(
@@ -512,7 +497,7 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
                   DateTime.now().subtract(Duration(seconds: entry['age_seconds'])),
                   locale: 'en_short',
                 ).toUpperCase(),
-                style: const TextStyle(color: Colors.grey, fontSize: 10),
+                style: const TextStyle(color: AppColors.textDim, fontSize: 10),
               ),
             ],
           ),

@@ -731,8 +731,9 @@ class FileVaultController extends ChangeNotifier {
 // =============================================================================
 
 class NetworkStorageScreen extends StatelessWidget {
-  final String myClientId;     // NEU
+  final String myClientId;
   final String myDeviceName;
+  
   const NetworkStorageScreen({
     super.key, 
     required this.myClientId, 
@@ -744,7 +745,6 @@ class NetworkStorageScreen extends StatelessWidget {
     return ChangeNotifierProvider(
       create: (_) {
         final controller = FileVaultController();
-        // Wir übergeben die eigene ID an den Controller
         controller.init(myClientId, myDeviceName); 
         return controller;
       },
@@ -771,14 +771,13 @@ class _FileVaultView extends StatelessWidget {
       },
       child: Scaffold(
         backgroundColor: Colors.transparent, 
-        body: SafeArea( // <--- HIER NEU: SafeArea
+        body: SafeArea( // ✅ WICHTIG für Mobile Layout
           child: Stack(
             children: [
               Column(
                 children: [
                   _buildHeader(context, controller),
                   
-                  // ... (ProgressIndicator, ErrorMessage, ListView wie bisher) ...
                   if (controller.isLoading)
                     const LinearProgressIndicator(
                       backgroundColor: AppColors.background,
@@ -816,7 +815,8 @@ class _FileVaultView extends StatelessWidget {
                   ),
                 ],
               ),
-              // ... (Action Bar Positioned bleibt gleich) ...
+              
+              // Action Bar (unten, einfahrbar)
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 300),
                 curve: Curves.easeOutExpo,
@@ -832,63 +832,15 @@ class _FileVaultView extends StatelessWidget {
     );
   }
 
-  void _showSortMenu(BuildContext context, FileVaultController controller) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: AppColors.card.withOpacity(0.95),
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          border: Border(top: BorderSide(color: AppColors.primary.withOpacity(0.5))),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "SORT SYSTEM NODES", 
-              style: TextStyle(
-                color: AppColors.primary, 
-                fontWeight: FontWeight.bold, 
-                letterSpacing: 2
-              )
-            ),
-            const SizedBox(height: 20),
-            _buildSortOption(ctx, controller, "NAME (A-Z)", SortOption.name, Icons.sort_by_alpha),
-            _buildSortOption(ctx, controller, "DATE (TIME)", SortOption.date, Icons.calendar_today),
-            _buildSortOption(ctx, controller, "SIZE (BYTES)", SortOption.size, Icons.data_usage),
-            _buildSortOption(ctx, controller, "TYPE (FORMAT)", SortOption.type, Icons.category),
-            const SizedBox(height: 20),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSortOption(BuildContext ctx, FileVaultController ctrl, String label, SortOption opt, IconData icon) {
-    final isSelected = ctrl.currentSort == opt;
-    return ListTile(
-      leading: Icon(icon, color: isSelected ? AppColors.accent : Colors.grey),
-      title: Text(label, style: TextStyle(color: isSelected ? Colors.white : Colors.grey, fontFamily: 'Rajdhani', fontWeight: FontWeight.bold)),
-      trailing: isSelected 
-        ? Icon(ctrl.sortAscending ? Icons.arrow_upward : Icons.arrow_downward, color: AppColors.accent)
-        : null,
-      onTap: () {
-        ctrl.changeSort(opt);
-        Navigator.pop(ctx);
-      },
-    );
-  }
+  // --- HEADER BEREICH (Toolbar & Suche) ---
 
   Widget _buildHeader(BuildContext context, FileVaultController controller) {
-    // Wenn Suche aktiv ist, zeigen wir nur die SearchBar (diese hat ihren eigenen Style)
+    // Wenn Suche aktiv ist, zeigen wir die SearchBar
     if (controller.isSearching) {
       return _buildSearchBar(context, controller);
     }
 
-    // Breadcrumbs bauen (wie vorher)
+    // Breadcrumbs bauen
     List<Widget> breadcrumbs = [];
     breadcrumbs.add(
       Padding(
@@ -916,29 +868,25 @@ class _FileVaultView extends StatelessWidget {
       );
     }
 
-    // Neuer Header Container
     return Container(
-      // Padding oben entfernt, da wir jetzt SafeArea nutzen
-      padding: const EdgeInsets.only(top: 0, bottom: 10, left: 0, right: 0),
-      color: AppColors.surface, // Dunkler Hintergrund für den ganzen Header-Bereich
+      padding: const EdgeInsets.only(bottom: 10),
+      color: AppColors.surface,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          
-          // 1. NEU: FILEVAULT TITEL ZEILE
+          // 1. TITEL ZEILE
           Container(
             padding: const EdgeInsets.all(12),
             child: const Row(
               children: [
                 Text("FILEVAULT", style: TextStyle(color: AppColors.primary, fontSize: 18, fontWeight: FontWeight.bold)),
                 SizedBox(width: 12),
-                // Status Dot (Optional: Zeigt an ob Verbindung da ist, hier einfach statisch Primary da Vault online ist)
                 Icon(Icons.circle, size: 8, color: AppColors.primary), 
               ],
             ),
           ),
 
-          // 2. EXISTIERENDE STEUERUNG (Breadcrumbs & Buttons)
+          // 2. TOOLBAR (Breadcrumbs & Actions)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10),
             child: Column(
@@ -952,6 +900,8 @@ class _FileVaultView extends StatelessWidget {
                         child: Row(children: breadcrumbs),
                       ),
                     ),
+                    
+                    // Action Buttons
                     IconButton(
                       icon: const Icon(Icons.upload_file, color: AppColors.primary),
                       onPressed: () => controller.uploadFile(),
@@ -965,9 +915,15 @@ class _FileVaultView extends StatelessWidget {
                       icon: const Icon(Icons.search, color: AppColors.primary),
                       onPressed: () => controller.toggleSearch(),
                     ),
+
+                    // ✅ WICHTIG: Platzhalter für App Icon (60px)
+                    const SizedBox(width: 60),
                   ],
                 ),
+                
                 const SizedBox(height: 10),
+                
+                // Info Zeile (Anzahl Dateien / Selektion)
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -991,6 +947,7 @@ class _FileVaultView extends StatelessWidget {
   }
 
   Widget _buildSearchBar(BuildContext context, FileVaultController controller) {
+    // Filter Icons Liste
     final filters = [
       {'type': VfsNodeType.image, 'label': 'IMG', 'icon': Icons.image},
       {'type': VfsNodeType.video, 'label': 'MOV', 'icon': Icons.movie},
@@ -999,8 +956,10 @@ class _FileVaultView extends StatelessWidget {
       {'type': VfsNodeType.code, 'label': 'DEV', 'icon': Icons.code},
       {'type': VfsNodeType.archive, 'label': 'ZIP', 'icon': Icons.inventory_2},
     ];
+
     return Container(
-      padding: const EdgeInsets.only(top: 50, bottom: 10, left: 16, right: 16),
+      // Padding oben angepasst für SafeArea
+      padding: const EdgeInsets.only(top: 10, bottom: 10, left: 16, right: 16),
       color: AppColors.card.withValues(alpha: 0.9),
       child: Column(
         children: [
@@ -1037,7 +996,7 @@ class _FileVaultView extends StatelessWidget {
                     onPressed: () => controller.performDeepSearch(controller.searchQuery),
                    ),
                 
-                IconButton( // <-- NEU: Auch hier sortieren können!
+                IconButton(
                   icon: const Icon(Icons.sort, color: AppColors.accent),
                   onPressed: () => _showSortMenu(context, controller),
                 ),
@@ -1046,10 +1005,16 @@ class _FileVaultView extends StatelessWidget {
                   icon: const Icon(Icons.close, color: AppColors.warning),
                   onPressed: () => controller.toggleSearch(),
                 ),
+
+                // ✅ WICHTIG: Auch hier Platzhalter für App Icon (60px)
+                const SizedBox(width: 60),
               ],
             ),
           ),
+          
           const SizedBox(height: 10),
+          
+          // Filter Leiste
           SizedBox(
             height: 32,
             child: ListView.separated(
@@ -1067,9 +1032,9 @@ class _FileVaultView extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
                     decoration: BoxDecoration(
-                      color: isActive ? AppColors.accent.withOpacity(0.2) : Colors.transparent,
+                      color: isActive ? AppColors.accent.withValues(alpha: 0.2) : Colors.transparent,
                       border: Border.all(
-                        color: isActive ? AppColors.accent : Colors.grey.withOpacity(0.3)
+                        color: isActive ? AppColors.accent : Colors.grey.withValues(alpha: 0.3)
                       ),
                       borderRadius: BorderRadius.circular(4),
                     ),
@@ -1095,7 +1060,6 @@ class _FileVaultView extends StatelessWidget {
 
           const SizedBox(height: 8),
           
-          // 3. Ergebnis-Zähler
           Align(
             alignment: Alignment.centerRight,
             child: Text(
@@ -1112,6 +1076,8 @@ class _FileVaultView extends StatelessWidget {
       ),
     );
   }
+
+  // --- LISTEN ELEMENTE & POPUPS ---
 
   Widget _buildFileItem(BuildContext context, FileVaultController controller, VfsNode node) {
     return Padding(
@@ -1191,7 +1157,7 @@ class _FileVaultView extends StatelessWidget {
   }
 
   Widget _buildActionBar(BuildContext context, FileVaultController controller) {
-    // Wenn wir was im Clipboard haben, zeigen wir PASTE anstelle der normalen Actions
+    // Paste Mode (Clipboard nicht leer)
     if (controller.canPaste && !controller.isSelectionMode) {
        return TechCard(
         borderColor: AppColors.accent,
@@ -1199,7 +1165,7 @@ class _FileVaultView extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
             _buildActionButton(Icons.close, "CLEAR CLIPBOARD", () {
-               controller._clipboardNodes.clear(); // Quick hack, besser Methode im Controller
+               controller._clipboardNodes.clear(); 
                controller.notifyListeners();
             }, isDanger: true),
             
@@ -1209,23 +1175,16 @@ class _FileVaultView extends StatelessWidget {
       );
     }
 
+    // Normaler Selection Mode
     return TechCard(
       borderColor: AppColors.primary,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
           _buildActionButton(Icons.close, "CANCEL", () => controller.clearSelection()),
-          
-          // COPY
           _buildActionButton(Icons.copy, "COPY", () => controller.copySelection()),
-          
-          // MOVE (CUT)
           _buildActionButton(Icons.drive_file_move, "MOVE", () => controller.cutSelection()),
-          
-          // GET (Download)
           _buildActionButton(Icons.download, "GET", () => controller.downloadSelection()),
-          
-          // DELETE
           _buildActionButton(Icons.delete, "DEL", () => controller.deleteNodes(), isDanger: true),
         ],
       ),
@@ -1253,6 +1212,56 @@ class _FileVaultView extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  void _showSortMenu(BuildContext context, FileVaultController controller) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: AppColors.card.withValues(alpha: 0.95),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          border: Border(top: BorderSide(color: AppColors.primary.withValues(alpha: 0.5))),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "SORT SYSTEM NODES", 
+              style: TextStyle(
+                color: AppColors.primary, 
+                fontWeight: FontWeight.bold, 
+                letterSpacing: 2
+              )
+            ),
+            const SizedBox(height: 20),
+            _buildSortOption(ctx, controller, "NAME (A-Z)", SortOption.name, Icons.sort_by_alpha),
+            _buildSortOption(ctx, controller, "DATE (TIME)", SortOption.date, Icons.calendar_today),
+            _buildSortOption(ctx, controller, "SIZE (BYTES)", SortOption.size, Icons.data_usage),
+            _buildSortOption(ctx, controller, "TYPE (FORMAT)", SortOption.type, Icons.category),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSortOption(BuildContext ctx, FileVaultController ctrl, String label, SortOption opt, IconData icon) {
+    final isSelected = ctrl.currentSort == opt;
+    return ListTile(
+      leading: Icon(icon, color: isSelected ? AppColors.accent : Colors.grey),
+      title: Text(label, style: TextStyle(color: isSelected ? Colors.white : Colors.grey, fontFamily: 'Rajdhani', fontWeight: FontWeight.bold)),
+      trailing: isSelected 
+        ? Icon(ctrl.sortAscending ? Icons.arrow_upward : Icons.arrow_downward, color: AppColors.accent)
+        : null,
+      onTap: () {
+        ctrl.changeSort(opt);
+        Navigator.pop(ctx);
+      },
     );
   }
 }
