@@ -72,19 +72,45 @@ class DataLinkService {
     _clientId = clientId;
     _myLocalIp = localIp;
 
-    print("🚀 Starting DataLinkService v3 (Realtime) for: $_clientId");
+    print("🚀 Starting DataLinkService v4 (Fast Boot) for: $_clientId");
 
-    // 1. Local P2P Server starten
-    await _startLocalServer();
-
-    // 2. ✅ WebSocket verbinden (Instant Push)
+    // 1. WebSocket SOFORT verbinden (für Echtzeit-Status)
     _connectWebSocket();
 
-    // 3. Fallback Sync Loop starten
+    // 2. SOFORT "Hallo" an den Server senden (Heartbeat)
+    // Damit erscheinst du sofort auf dem Laptop!
+    _sendHeartbeat(); 
+
+    // 3. Lokalen Server parallel starten (nicht warten!)
+    _startLocalServer().then((_) {
+      print("🌐 Local Server ready (Background)");
+    });
+
+    // 4. Sync Loop starten (für Fallback)
     _startSyncLoop();
 
     _isRunning = true;
-    print("✅ DataLinkService started");
+    print("✅ DataLinkService started (Instant Mode)");
+  }
+
+  Future<void> _sendHeartbeat() async {
+    try {
+      // Wir sagen dem Server: "Hier bin ich, das ist meine IP, das ist mein Port"
+      await http.post(
+        Uri.parse('$serverBaseUrl/heartbeat'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "client_id": _clientId,
+          "client_name": Platform.localHostname, // Oder dein App-Name
+          "device_type": Platform.isAndroid || Platform.isIOS ? "mobile" : "desktop",
+          "local_ip": _myLocalIp,
+          "file_server_port": _localServer?.port ?? 0, // 0 falls Server noch startet
+        }),
+      ).timeout(const Duration(seconds: 2)); // Kurzer Timeout, darf App nicht blockieren!
+    } catch (e) {
+      // Leise scheitern, wir versuchen es im Loop gleich wieder
+      print("💓 Heartbeat skipped: $e");
+    }
   }
 
   Future<void> stop() async {
@@ -188,40 +214,49 @@ class DataLinkService {
     });
   }
 
+  // In lib/services/data_link_service.dart
+
   void _handleWebSocketMessage(String message) {
     try {
       final data = json.decode(message);
       final event = data['event'];
 
+      // Fall A: Jemand bietet mir eine Datei an
       if (event == 'transfer_offer') {
         print("🚀 INSTANT OFFER RECEIVED via WebSocket!");
         final transferData = data['transfer'];
         _handleInstantOffer(transferData);
       } 
-      // ✅ NEU: Remote Commands ausführen
+      
+      // Fall B: Remote Command (Löschen, Umbenennen...)
       else if (event == 'execute_command') {
         _handleRemoteCommand(data);
       }
+      
+      // Fall C: RELAY UPDATE (Das hat gefehlt!)
+      // Der Server sagt: "Datei liegt jetzt auf der Festplatte bereit!"
       else if (event == 'transfer_update') {
           final transferData = data['transfer'];
+          // Wir bauen ein Transfer-Objekt aus den Daten
           final transfer = Transfer.fromServerResponse(transferData);
           
-          // Update in der Liste
+          // UI Update
           _notifyTransferUpdate(transfer);
           
-          // Wenn es für MICH ist und bereit liegt -> Sofort runterladen!
+          // ENTSCHEIDUNG: Ist das für mich? Und ist es bereit?
           if (transfer.status == TransferStatus.relayReady && 
               !_processedTransferIds.contains(transfer.id) &&
               _downloadPath.isNotEmpty) {
                 
-            print("🔔 Instant Relay Notification received! Starting download...");
+            print("🔔 Relay Download Triggered via WebSocket!");
+            // Download vom Pi starten
             _handleRelayReadyTransfer(transfer, _downloadPath);
           }
-        }
-      } catch (e) {
-        print("⚠️ WS Message Parse Error: $e");
       }
+    } catch (e) {
+      print("⚠️ WS Message Parse Error: $e");
     }
+  }
   // ✅ NEUE METHODE: Führt Befehle vom Server aus
   // In lib/services/data_link_service.dart
 
@@ -407,8 +442,15 @@ class DataLinkService {
 
   void _startSyncLoop() {
     _syncTimer?.cancel();
-    // ✅ Langsameres Intervall (10s), da WebSocket primär ist
-    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+    
+    // SOFORT ausführen!
+    _syncTransfers();
+    _monitorSenderTasks();
+    _sendHeartbeat(); // Wichtig!
+
+    // Dann alle 5 Sekunden wiederholen (schnelleres Update)
+    _syncTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      _sendHeartbeat(); // Regelmäßiges "Ich lebe noch"
       _syncTransfers();
       _monitorSenderTasks();
     });
@@ -476,24 +518,27 @@ class DataLinkService {
   // In lib/services/data_link_service.dart
 
   Future<void> _handleP2PRequest(HttpRequest request) async {
-    final path = request.uri.path;
-    
-    if (path.startsWith("/download/")) {
-      try {
-        // 1. Pfad sicher decodieren (Fix für Umlaute/Leerzeichen)
-        // Wir nehmen alles nach "/download/"
-        String rawPath = path.substring("/download/".length);
+    try {
+      // Wir prüfen, ob der Pfad mit /download/ beginnt
+      if (request.uri.pathSegments.isNotEmpty && request.uri.pathSegments.first == 'download') {
         
-        // Decodieren (z.B. %20 -> Leerzeichen, %C3%B6 -> ö)
-        final filePath = Uri.decodeComponent(rawPath);
+        // Den Rest des Pfades holen (alles nach /download/)
+        String rawPath = request.uri.pathSegments.skip(1).join("/");
         
-        print("📂 P2P Request for: $filePath"); // Debug Log
+        // 🛡️ FIX: Sicherheit gegen "Illegal Percent Encoding"
+        String filePath;
+        try {
+          filePath = Uri.decodeComponent(rawPath);
+        } catch (e) {
+          // Fallback: Wenn decode knallt, nehmen wir den Pfad so wie er ist
+          print("⚠️ URI Decode failed, using raw path: $rawPath");
+          filePath = rawPath;
+        }
 
+        print("📂 P2P Request for: $filePath"); 
         final file = File(filePath);
         
-        // 2. Existenz-Check BEVOR wir antworten
         if (!file.existsSync()) {
-          print("❌ File not found on disk: $filePath");
           request.response.statusCode = 404;
           request.response.write("File not found");
           await request.response.close();
@@ -501,60 +546,33 @@ class DataLinkService {
         }
 
         final totalBytes = file.lengthSync();
+        // Header sicher machen (encodeComponent verhindert Header-Fehler bei Umlauten)
+        final safeName = Uri.encodeComponent(p.basename(filePath));
         
-        // 3. Headers setzen
         request.response.statusCode = 200;
         request.response.headers.add("Content-Type", "application/octet-stream");
         request.response.headers.add("Content-Length", totalBytes);
-        request.response.headers.add(
-          "Content-Disposition", 
-          'attachment; filename="${p.basename(filePath)}"'
-        );
+        request.response.headers.add("Content-Disposition", 'attachment; filename="$safeName"');
 
-        // UI Update starten
-        _notifyProcessingState(true);
-        _notifyProgress(filePath, 0.0, "Sending P2P...");
-
-        // 4. Streamen mit Fehler-Check
-        int sentBytes = 0;
-        
+        // Streaming...
         try {
-          await for (var chunk in file.openRead()) {
-            request.response.add(chunk);
-            sentBytes += chunk.length;
-            
-            // Progress Throttling (nicht bei jedem Byte updaten)
-            if (sentBytes % (512 * 1024) == 0 || sentBytes == totalBytes) {
-              double progress = sentBytes / (totalBytes == 0 ? 1 : totalBytes);
-              _notifyProgress(filePath, progress, "Sending ${((progress)*100).toInt()}%");
-            }
-          }
-          
+          await request.response.addStream(file.openRead());
           await request.response.close();
-          _notifyProgress(filePath, 1.0, "Sent Successfully");
-          
-        } catch (streamError) {
-          print("❌ Error during streaming: $streamError");
-          // Wenn der Stream hier bricht, ist der Header schon gesendet.
-          // Wir können nur die Verbindung kappen.
-          await request.response.close(); 
+        } catch (_) {
+          // Client hat abgebrochen
         }
 
-      } catch (e) {
-        print("❌ P2P General Error: $e");
-        if (!request.response.headers.chunkedTransferEncoding) {
-           try {
-             request.response.statusCode = 500;
-             request.response.write("Internal Error: $e");
-           } catch (_) {} // Falls Header schon raus sind, ignorieren
-        }
+      } else {
+        request.response.statusCode = 404;
         await request.response.close();
-      } finally {
-        _notifyProcessingState(false);
       }
-    } else {
-      request.response.statusCode = 404;
-      await request.response.close();
+    } catch (e) {
+      print("❌ P2P Server Error: $e");
+      try {
+        request.response.statusCode = 500;
+        request.response.write("Internal Error");
+        await request.response.close();
+      } catch (_) {}
     }
   }
 
@@ -562,34 +580,47 @@ class DataLinkService {
   // SEND OPERATIONS
   // =============================================================================
 
+  // In lib/services/data_link_service.dart
+
   Future<String> sendFile(File file, List<String> targetIds, {String? destinationPath}) async {
     if (targetIds.isEmpty) throw Exception("No targets selected");
     if (!file.existsSync()) throw Exception("File not found");
 
     final transferId = _generateTransferId();
-    final fileName = p.basename(file.path);
-    final fileSize = file.lengthSync();
+    // Pfad für Windows & Server sicher machen
+    final fileName = p.basename(file.path); 
 
     print("📤 Sending file: $fileName");
 
     for (var targetId in targetIds) {
+      // 1. Dem Server Bescheid sagen ("Ich will was senden")
       await _offerFile(
         filePath: file.path,
         targetId: targetId,
         transferId: transferId,
         destinationPath: destinationPath,
       );
+
+      // 2. Der entscheidende Moment: P2P oder Relay?
       try {
-         // Versuch 1: P2P (Direkt)         
-       } catch (p2pError) {
-         print("⚠️ P2P failed ($p2pError). Switching to Relay...");
+         print("⚡ Trying P2P connection to $targetId...");
+         await Future.delayed(const Duration(seconds: 2));
          
-         // Versuch 2: RELAY (Der Retter in der Not)
-         // Wir rufen die gefixte Funktion von oben auf!
+         // Wenn der Transfer noch nicht läuft/fertig ist, nehmen wir an, P2P ist gescheitert.
+         if (!_activeOperations.containsKey(transferId)) {
+           throw Exception("P2P too slow, switching to Relay");
+         }
+         
+       } catch (p2pError) {
+         print("⚠️ P2P unavailable ($p2pError). Switching to RELAY Cloud Upload...");
+         
+         // 3. FALLBACK: Relay anfordern!
+         // Das lädt die Datei auf den Raspberry Pi hoch.
          await _requestRelay(transferId, file.path);
        }
     }
-    _notifyMessage("✅ File offered: $fileName");
+    
+    _notifyMessage("✅ Transfer started: $fileName");
     return transferId;
   }
 
@@ -656,28 +687,43 @@ class DataLinkService {
   // RECEIVE & DOWNLOAD LOGIC
   // =============================================================================
 
-  Future<void> _handleOfferedTransfer(Transfer transfer, String downloadPath) async {
-    _processedTransferIds.add(transfer.id);
+  Future<void> _handleOfferedTransfer(Transfer t, String path) async {
+    _processedTransferIds.add(t.id);
     
-    File targetFile;
-    if (transfer.destinationPath != null && transfer.destinationPath!.isNotEmpty) {
-      targetFile = File(p.join(transfer.destinationPath!, transfer.fileName));
-    } else {
-      targetFile = File(p.join(downloadPath, transfer.fileName));
-    }
+    // Zielpfad bestimmen
+    File target = File(p.join(t.destinationPath ?? path, t.fileName));
     
-    _notifyMessage("📥 Incoming: ${transfer.fileName}");
-    
-    final p2pSuccess = await _tryP2PDownload(transfer, targetFile);
+    // Versuch 1: P2P Download
+    bool p2pSuccess = await _tryP2PDownload(t, target);
     
     if (p2pSuccess) {
-      _notifyMessage("✨ P2P Success: ${transfer.fileName}");
-      _updateTransferStatus(transfer, TransferStatus.completed);
-      await _reportTransferEvent(transfer.id, "completed", "via P2P");
+      _reportTransferEvent(t.id, "completed", "P2P");
+      _updateTransferStatus(t, TransferStatus.completed);
+      _notifyMessage("✨ P2P Success: ${t.fileName}");
     } else {
-      _notifyMessage("⚠️ P2P failed, requesting relay...");
-      await _requestRelay(transfer.id, targetFile.path);
-      _processedTransferIds.remove(transfer.id);
+      // P2P FEHLGESCHLAGEN
+      _notifyMessage("⚠️ P2P failed via Mobile/Remote. Requesting Sender Relay...");
+      
+      // 🛑 STOP! Wir laden NICHT hoch (wir haben die Datei ja nicht).
+      // Wir bitten den Server, dem SENDER Bescheid zu sagen.
+      await _requestRelayFromSender(t.id);
+      
+      // Wir entfernen die ID aus "processed", damit wir später das Relay-Update akzeptieren
+      _processedTransferIds.remove(t.id);
+    }
+  }
+
+  // Neue Hilfsmethode: Fordert den Sender auf, das Relay zu nutzen
+  Future<void> _requestRelayFromSender(String transferId) async {
+    try {
+      await http.post(
+        Uri.parse('$serverBaseUrl/transfer/request_relay'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({"transfer_id": transferId}),
+      );
+      print("📡 Sent Relay Request to Server (waiting for Sender upload)");
+    } catch (e) {
+      print("❌ Failed to request relay: $e");
     }
   }
 
@@ -769,53 +815,77 @@ class DataLinkService {
   }
 
   Future<void> _monitorSenderTasks() async {
+    // Wir schauen uns alle Transfers an, die wir gerade versenden ("activeOperations")
     for (var transferId in _activeOperations.keys.toList()) {
       try {
         final response = await http.get(Uri.parse('$serverBaseUrl/transfer/status/$transferId'));
+        
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
+          
+          // Wenn der Status "RELAY_REQUESTED" ist, heißt das:
+          // Der Empfänger hat gesagt "P2P geht nicht, bitte lad hoch!"
           if (data['status'] == "RELAY_REQUESTED" && !_isProcessing) {
+            print("🚀 Empfänger hat Relay angefordert. Starte Upload...");
+            
             final filePath = _activeOperations[transferId]!;
+            
+            // JETZT laden wir hoch (wir sind ja der Sender!)
             await _uploadToRelay(filePath, transferId);
           }
         }
-      } catch (e) {}
+      } catch (e) {
+        // Fehler ignorieren, nächster Check kommt bald
+      }
     }
   }
+
+  // In lib/services/data_link_service.dart
 
   Future<void> _uploadToRelay(String filePath, String transferId) async {
     _notifyProcessingState(true);
     _notifyProgress(transferId, 0.0, "Preparing upload...");
 
     try {
-      // STUFE 1: Basis-Bereinigung (Leerzeichen am Anfang/Ende weg)
+      // ---------------------------------------------------------
+      // 🧹 PFAD BEREINIGUNG (Der Fix für Windows & Sonderzeichen)
+      // ---------------------------------------------------------
       String cleanPath = filePath.trim();
-      
-      // STUFE 2: Normalisieren (Backslashes korrigieren)
+
+      // VERSUCH 1: Ist der Pfad URL-kodiert (enthält %20 etc.)? -> Dekodieren!
+      if (cleanPath.contains('%')) {
+        try { cleanPath = Uri.decodeFull(cleanPath); } catch (_) {}
+      }
+
+      // VERSUCH 2: Windows-Slashes normalisieren
       cleanPath = p.normalize(cleanPath);
-      
       File file = File(cleanPath);
-
-      // STUFE 3: Den "echten" Pfad von Windows holen (löst Shortcuts/Aliase auf)
-      try {
-        if (file.existsSync()) {
-          cleanPath = file.resolveSymbolicLinksSync();
-          file = File(cleanPath);
-        }
-      } catch (e) {
-        print("⚠️ Could not resolve symbolic path (ignoring): $e");
-      }
-
-      // Jetzt erst prüfen wir final
+      
+      // VERSUCH 3: Falls nicht gefunden, Symlinks prüfen
       if (!file.existsSync()) {
-         print("❌ CRITICAL: File really not found at: '$cleanPath'");
-         throw Exception("File missing on disk: $cleanPath");
+        try {
+           cleanPath = file.resolveSymbolicLinksSync();
+           file = File(cleanPath);
+        } catch (_) {}
       }
+      
+      // FINALER CHECK
+      if (!file.existsSync()) {
+        // Letzter Versuch: Manchmal hilft es, den Pfad "raw" zu lassen
+        file = File(filePath);
+        if (!file.existsSync()) {
+           throw Exception("OS Error: File not found at '$cleanPath'");
+        }
+      }
+      // ---------------------------------------------------------
 
-      final fileSize = file.lengthSync();
+      final fileSize = file.lengthSync(); // Hier stürzte es vorher ab
       final fileName = p.basename(cleanPath);
+      
+      // WICHTIG: Dateinamen für den Server sicher machen (ASCII only für Header)
+      final safeFileName = Uri.encodeComponent(fileName);
 
-      print("🚀 Uploading $fileName (${(fileSize/1024).toStringAsFixed(1)} KB) to Relay");
+      print("🚀 Uploading $fileName to Relay");
 
       final uri = Uri.parse('$serverBaseUrl/upload');
       final request = http.StreamedRequest('POST', uri);
@@ -824,8 +894,9 @@ class DataLinkService {
       request.headers['Content-Type'] = 'multipart/form-data; boundary=$boundary';
       
       final transferIdField = '--$boundary\r\nContent-Disposition: form-data; name="transfer_id"\r\n\r\n$transferId\r\n';
-      // WICHTIG: Dateiname in Anführungszeichen für Namen mit Leerzeichen!
-      final fileHeader = '--$boundary\r\nContent-Disposition: form-data; name="file"; filename="$fileName"\r\nContent-Type: application/octet-stream\r\n\r\n';
+      
+      // Wir senden den "sicheren" Dateinamen im Header
+      final fileHeader = '--$boundary\r\nContent-Disposition: form-data; name="file"; filename="$safeFileName"\r\nContent-Type: application/octet-stream\r\n\r\n';
       final endBoundary = '\r\n--$boundary--\r\n';
       
       final totalRequestSize = utf8.encode(transferIdField + fileHeader + endBoundary).length + fileSize;
@@ -840,7 +911,6 @@ class DataLinkService {
       await for (var chunk in stream) {
         request.sink.add(chunk);
         sentFileBytes += chunk.length;
-        
         if (sentFileBytes % (512 * 1024) == 0 || sentFileBytes == fileSize) {
            _notifyProgress(transferId, sentFileBytes / fileSize, "Uploading...");
         }
@@ -848,7 +918,7 @@ class DataLinkService {
       
       request.sink.add(utf8.encode(endBoundary));
       await request.sink.close();
-
+      
       _notifyProgress(transferId, 1.0, "Finalizing..."); 
       
       final response = await request.send();
