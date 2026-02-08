@@ -476,24 +476,27 @@ class DataLinkService {
   // In lib/services/data_link_service.dart
 
   Future<void> _handleP2PRequest(HttpRequest request) async {
-    final path = request.uri.path;
-    
-    if (path.startsWith("/download/")) {
-      try {
-        // 1. Pfad sicher decodieren (Fix für Umlaute/Leerzeichen)
-        // Wir nehmen alles nach "/download/"
-        String rawPath = path.substring("/download/".length);
+    try {
+      // Wir prüfen, ob der Pfad mit /download/ beginnt
+      if (request.uri.pathSegments.isNotEmpty && request.uri.pathSegments.first == 'download') {
         
-        // Decodieren (z.B. %20 -> Leerzeichen, %C3%B6 -> ö)
-        final filePath = Uri.decodeComponent(rawPath);
+        // Den Rest des Pfades holen (alles nach /download/)
+        String rawPath = request.uri.pathSegments.skip(1).join("/");
         
-        print("📂 P2P Request for: $filePath"); // Debug Log
+        // 🛡️ FIX: Sicherheit gegen "Illegal Percent Encoding"
+        String filePath;
+        try {
+          filePath = Uri.decodeComponent(rawPath);
+        } catch (e) {
+          // Fallback: Wenn decode knallt, nehmen wir den Pfad so wie er ist
+          print("⚠️ URI Decode failed, using raw path: $rawPath");
+          filePath = rawPath;
+        }
 
+        print("📂 P2P Request for: $filePath"); 
         final file = File(filePath);
         
-        // 2. Existenz-Check BEVOR wir antworten
         if (!file.existsSync()) {
-          print("❌ File not found on disk: $filePath");
           request.response.statusCode = 404;
           request.response.write("File not found");
           await request.response.close();
@@ -501,60 +504,33 @@ class DataLinkService {
         }
 
         final totalBytes = file.lengthSync();
+        // Header sicher machen (encodeComponent verhindert Header-Fehler bei Umlauten)
+        final safeName = Uri.encodeComponent(p.basename(filePath));
         
-        // 3. Headers setzen
         request.response.statusCode = 200;
         request.response.headers.add("Content-Type", "application/octet-stream");
         request.response.headers.add("Content-Length", totalBytes);
-        request.response.headers.add(
-          "Content-Disposition", 
-          'attachment; filename="${p.basename(filePath)}"'
-        );
+        request.response.headers.add("Content-Disposition", 'attachment; filename="$safeName"');
 
-        // UI Update starten
-        _notifyProcessingState(true);
-        _notifyProgress(filePath, 0.0, "Sending P2P...");
-
-        // 4. Streamen mit Fehler-Check
-        int sentBytes = 0;
-        
+        // Streaming...
         try {
-          await for (var chunk in file.openRead()) {
-            request.response.add(chunk);
-            sentBytes += chunk.length;
-            
-            // Progress Throttling (nicht bei jedem Byte updaten)
-            if (sentBytes % (512 * 1024) == 0 || sentBytes == totalBytes) {
-              double progress = sentBytes / (totalBytes == 0 ? 1 : totalBytes);
-              _notifyProgress(filePath, progress, "Sending ${((progress)*100).toInt()}%");
-            }
-          }
-          
+          await request.response.addStream(file.openRead());
           await request.response.close();
-          _notifyProgress(filePath, 1.0, "Sent Successfully");
-          
-        } catch (streamError) {
-          print("❌ Error during streaming: $streamError");
-          // Wenn der Stream hier bricht, ist der Header schon gesendet.
-          // Wir können nur die Verbindung kappen.
-          await request.response.close(); 
+        } catch (_) {
+          // Client hat abgebrochen
         }
 
-      } catch (e) {
-        print("❌ P2P General Error: $e");
-        if (!request.response.headers.chunkedTransferEncoding) {
-           try {
-             request.response.statusCode = 500;
-             request.response.write("Internal Error: $e");
-           } catch (_) {} // Falls Header schon raus sind, ignorieren
-        }
+      } else {
+        request.response.statusCode = 404;
         await request.response.close();
-      } finally {
-        _notifyProcessingState(false);
       }
-    } else {
-      request.response.statusCode = 404;
-      await request.response.close();
+    } catch (e) {
+      print("❌ P2P Server Error: $e");
+      try {
+        request.response.statusCode = 500;
+        request.response.write("Internal Error");
+        await request.response.close();
+      } catch (_) {}
     }
   }
 
@@ -783,39 +759,52 @@ class DataLinkService {
     }
   }
 
+  // In lib/services/data_link_service.dart
+
   Future<void> _uploadToRelay(String filePath, String transferId) async {
     _notifyProcessingState(true);
     _notifyProgress(transferId, 0.0, "Preparing upload...");
 
     try {
-      // STUFE 1: Basis-Bereinigung (Leerzeichen am Anfang/Ende weg)
+      // ---------------------------------------------------------
+      // 🧹 PFAD BEREINIGUNG (Der Fix für Windows & Sonderzeichen)
+      // ---------------------------------------------------------
       String cleanPath = filePath.trim();
-      
-      // STUFE 2: Normalisieren (Backslashes korrigieren)
+
+      // VERSUCH 1: Ist der Pfad URL-kodiert (enthält %20 etc.)? -> Dekodieren!
+      if (cleanPath.contains('%')) {
+        try { cleanPath = Uri.decodeFull(cleanPath); } catch (_) {}
+      }
+
+      // VERSUCH 2: Windows-Slashes normalisieren
       cleanPath = p.normalize(cleanPath);
-      
       File file = File(cleanPath);
-
-      // STUFE 3: Den "echten" Pfad von Windows holen (löst Shortcuts/Aliase auf)
-      try {
-        if (file.existsSync()) {
-          cleanPath = file.resolveSymbolicLinksSync();
-          file = File(cleanPath);
-        }
-      } catch (e) {
-        print("⚠️ Could not resolve symbolic path (ignoring): $e");
-      }
-
-      // Jetzt erst prüfen wir final
+      
+      // VERSUCH 3: Falls nicht gefunden, Symlinks prüfen
       if (!file.existsSync()) {
-         print("❌ CRITICAL: File really not found at: '$cleanPath'");
-         throw Exception("File missing on disk: $cleanPath");
+        try {
+           cleanPath = file.resolveSymbolicLinksSync();
+           file = File(cleanPath);
+        } catch (_) {}
       }
+      
+      // FINALER CHECK
+      if (!file.existsSync()) {
+        // Letzter Versuch: Manchmal hilft es, den Pfad "raw" zu lassen
+        file = File(filePath);
+        if (!file.existsSync()) {
+           throw Exception("OS Error: File not found at '$cleanPath'");
+        }
+      }
+      // ---------------------------------------------------------
 
-      final fileSize = file.lengthSync();
+      final fileSize = file.lengthSync(); // Hier stürzte es vorher ab
       final fileName = p.basename(cleanPath);
+      
+      // WICHTIG: Dateinamen für den Server sicher machen (ASCII only für Header)
+      final safeFileName = Uri.encodeComponent(fileName);
 
-      print("🚀 Uploading $fileName (${(fileSize/1024).toStringAsFixed(1)} KB) to Relay");
+      print("🚀 Uploading $fileName to Relay");
 
       final uri = Uri.parse('$serverBaseUrl/upload');
       final request = http.StreamedRequest('POST', uri);
@@ -824,8 +813,9 @@ class DataLinkService {
       request.headers['Content-Type'] = 'multipart/form-data; boundary=$boundary';
       
       final transferIdField = '--$boundary\r\nContent-Disposition: form-data; name="transfer_id"\r\n\r\n$transferId\r\n';
-      // WICHTIG: Dateiname in Anführungszeichen für Namen mit Leerzeichen!
-      final fileHeader = '--$boundary\r\nContent-Disposition: form-data; name="file"; filename="$fileName"\r\nContent-Type: application/octet-stream\r\n\r\n';
+      
+      // Wir senden den "sicheren" Dateinamen im Header
+      final fileHeader = '--$boundary\r\nContent-Disposition: form-data; name="file"; filename="$safeFileName"\r\nContent-Type: application/octet-stream\r\n\r\n';
       final endBoundary = '\r\n--$boundary--\r\n';
       
       final totalRequestSize = utf8.encode(transferIdField + fileHeader + endBoundary).length + fileSize;
@@ -840,7 +830,6 @@ class DataLinkService {
       await for (var chunk in stream) {
         request.sink.add(chunk);
         sentFileBytes += chunk.length;
-        
         if (sentFileBytes % (512 * 1024) == 0 || sentFileBytes == fileSize) {
            _notifyProgress(transferId, sentFileBytes / fileSize, "Uploading...");
         }
@@ -848,7 +837,7 @@ class DataLinkService {
       
       request.sink.add(utf8.encode(endBoundary));
       await request.sink.close();
-
+      
       _notifyProgress(transferId, 1.0, "Finalizing..."); 
       
       final response = await request.send();
