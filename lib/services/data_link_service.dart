@@ -72,19 +72,45 @@ class DataLinkService {
     _clientId = clientId;
     _myLocalIp = localIp;
 
-    print("🚀 Starting DataLinkService v3 (Realtime) for: $_clientId");
+    print("🚀 Starting DataLinkService v4 (Fast Boot) for: $_clientId");
 
-    // 1. Local P2P Server starten
-    await _startLocalServer();
-
-    // 2. ✅ WebSocket verbinden (Instant Push)
+    // 1. WebSocket SOFORT verbinden (für Echtzeit-Status)
     _connectWebSocket();
 
-    // 3. Fallback Sync Loop starten
+    // 2. SOFORT "Hallo" an den Server senden (Heartbeat)
+    // Damit erscheinst du sofort auf dem Laptop!
+    _sendHeartbeat(); 
+
+    // 3. Lokalen Server parallel starten (nicht warten!)
+    _startLocalServer().then((_) {
+      print("🌐 Local Server ready (Background)");
+    });
+
+    // 4. Sync Loop starten (für Fallback)
     _startSyncLoop();
 
     _isRunning = true;
-    print("✅ DataLinkService started");
+    print("✅ DataLinkService started (Instant Mode)");
+  }
+
+  Future<void> _sendHeartbeat() async {
+    try {
+      // Wir sagen dem Server: "Hier bin ich, das ist meine IP, das ist mein Port"
+      await http.post(
+        Uri.parse('$serverBaseUrl/heartbeat'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "client_id": _clientId,
+          "client_name": Platform.localHostname, // Oder dein App-Name
+          "device_type": Platform.isAndroid || Platform.isIOS ? "mobile" : "desktop",
+          "local_ip": _myLocalIp,
+          "file_server_port": _localServer?.port ?? 0, // 0 falls Server noch startet
+        }),
+      ).timeout(const Duration(seconds: 2)); // Kurzer Timeout, darf App nicht blockieren!
+    } catch (e) {
+      // Leise scheitern, wir versuchen es im Loop gleich wieder
+      print("💓 Heartbeat skipped: $e");
+    }
   }
 
   Future<void> stop() async {
@@ -188,40 +214,49 @@ class DataLinkService {
     });
   }
 
+  // In lib/services/data_link_service.dart
+
   void _handleWebSocketMessage(String message) {
     try {
       final data = json.decode(message);
       final event = data['event'];
 
+      // Fall A: Jemand bietet mir eine Datei an
       if (event == 'transfer_offer') {
         print("🚀 INSTANT OFFER RECEIVED via WebSocket!");
         final transferData = data['transfer'];
         _handleInstantOffer(transferData);
       } 
-      // ✅ NEU: Remote Commands ausführen
+      
+      // Fall B: Remote Command (Löschen, Umbenennen...)
       else if (event == 'execute_command') {
         _handleRemoteCommand(data);
       }
+      
+      // Fall C: RELAY UPDATE (Das hat gefehlt!)
+      // Der Server sagt: "Datei liegt jetzt auf der Festplatte bereit!"
       else if (event == 'transfer_update') {
           final transferData = data['transfer'];
+          // Wir bauen ein Transfer-Objekt aus den Daten
           final transfer = Transfer.fromServerResponse(transferData);
           
-          // Update in der Liste
+          // UI Update
           _notifyTransferUpdate(transfer);
           
-          // Wenn es für MICH ist und bereit liegt -> Sofort runterladen!
+          // ENTSCHEIDUNG: Ist das für mich? Und ist es bereit?
           if (transfer.status == TransferStatus.relayReady && 
               !_processedTransferIds.contains(transfer.id) &&
               _downloadPath.isNotEmpty) {
                 
-            print("🔔 Instant Relay Notification received! Starting download...");
+            print("🔔 Relay Download Triggered via WebSocket!");
+            // Download vom Pi starten
             _handleRelayReadyTransfer(transfer, _downloadPath);
           }
-        }
-      } catch (e) {
-        print("⚠️ WS Message Parse Error: $e");
       }
+    } catch (e) {
+      print("⚠️ WS Message Parse Error: $e");
     }
+  }
   // ✅ NEUE METHODE: Führt Befehle vom Server aus
   // In lib/services/data_link_service.dart
 
@@ -407,8 +442,15 @@ class DataLinkService {
 
   void _startSyncLoop() {
     _syncTimer?.cancel();
-    // ✅ Langsameres Intervall (10s), da WebSocket primär ist
-    _syncTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+    
+    // SOFORT ausführen!
+    _syncTransfers();
+    _monitorSenderTasks();
+    _sendHeartbeat(); // Wichtig!
+
+    // Dann alle 5 Sekunden wiederholen (schnelleres Update)
+    _syncTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      _sendHeartbeat(); // Regelmäßiges "Ich lebe noch"
       _syncTransfers();
       _monitorSenderTasks();
     });
@@ -538,34 +580,47 @@ class DataLinkService {
   // SEND OPERATIONS
   // =============================================================================
 
+  // In lib/services/data_link_service.dart
+
   Future<String> sendFile(File file, List<String> targetIds, {String? destinationPath}) async {
     if (targetIds.isEmpty) throw Exception("No targets selected");
     if (!file.existsSync()) throw Exception("File not found");
 
     final transferId = _generateTransferId();
-    final fileName = p.basename(file.path);
-    final fileSize = file.lengthSync();
+    // Pfad für Windows & Server sicher machen
+    final fileName = p.basename(file.path); 
 
     print("📤 Sending file: $fileName");
 
     for (var targetId in targetIds) {
+      // 1. Dem Server Bescheid sagen ("Ich will was senden")
       await _offerFile(
         filePath: file.path,
         targetId: targetId,
         transferId: transferId,
         destinationPath: destinationPath,
       );
+
+      // 2. Der entscheidende Moment: P2P oder Relay?
       try {
-         // Versuch 1: P2P (Direkt)         
-       } catch (p2pError) {
-         print("⚠️ P2P failed ($p2pError). Switching to Relay...");
+         print("⚡ Trying P2P connection to $targetId...");
+         await Future.delayed(const Duration(seconds: 2));
          
-         // Versuch 2: RELAY (Der Retter in der Not)
-         // Wir rufen die gefixte Funktion von oben auf!
+         // Wenn der Transfer noch nicht läuft/fertig ist, nehmen wir an, P2P ist gescheitert.
+         if (!_activeOperations.containsKey(transferId)) {
+           throw Exception("P2P too slow, switching to Relay");
+         }
+         
+       } catch (p2pError) {
+         print("⚠️ P2P unavailable ($p2pError). Switching to RELAY Cloud Upload...");
+         
+         // 3. FALLBACK: Relay anfordern!
+         // Das lädt die Datei auf den Raspberry Pi hoch.
          await _requestRelay(transferId, file.path);
        }
     }
-    _notifyMessage("✅ File offered: $fileName");
+    
+    _notifyMessage("✅ Transfer started: $fileName");
     return transferId;
   }
 
