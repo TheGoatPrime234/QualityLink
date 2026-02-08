@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../ui/theme_constants.dart';
+
 class DynamicIslandWidget extends StatefulWidget {
   const DynamicIslandWidget({super.key});
 
@@ -13,7 +15,7 @@ class DynamicIslandWidget extends StatefulWidget {
 class _DynamicIslandWidgetState extends State<DynamicIslandWidget> with SingleTickerProviderStateMixin {
   String _status = "Initializing...";
   double _progress = 0.0;
-  Color _color = const Color(0xFF00FF41);
+  Color _color = AppColors.accent;
   
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;

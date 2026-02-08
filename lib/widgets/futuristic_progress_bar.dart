@@ -53,11 +53,11 @@ class _FuturisticProgressBarState extends State<FuturisticProgressBar>
       case ProgressBarMode.zipping:
         return const Color(0xFFAA00FF); // Lila
       case ProgressBarMode.uploading:
-        return const Color(0xFF00FF41); // Grün
+        return const Color.fromARGB(255, 0, 255, 98);
       case ProgressBarMode.p2p:
         return const Color(0xFF00E5FF); // Cyan
       case ProgressBarMode.relay:
-        return const Color(0xFFFF8800); // Orange
+        return const Color(0xFF40E0D0); // Türkis
     }
   }
 

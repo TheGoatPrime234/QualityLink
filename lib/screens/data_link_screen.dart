@@ -354,8 +354,11 @@ Future<void> _pickAndSendFiles() async {
     
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? Colors.red : const Color(0xFF00FF41).withValues(alpha: 0.3),
+        content: Text(message, style: const TextStyle(color: Colors.white)),
+        // Warning (Pink) für Fehler, Cyan (Primary) Glow für Erfolg
+        backgroundColor: isError 
+            ? AppColors.warning 
+            : AppColors.primary.withValues(alpha: 0.3),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -367,7 +370,7 @@ Future<void> _pickAndSendFiles() async {
     final otherPeers = _peers.where((p) => !p.isSameLan).toList();
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AppColors.background, // ✅ Deep Black
       body: SafeArea(
         child: Column(
           children: [
@@ -388,11 +391,12 @@ Future<void> _pickAndSendFiles() async {
                     _buildHeader(),
                     const SizedBox(height: 20),
                     _buildPathSelector(),
-                    const Divider(),
+                    const Divider(color: Colors.white10), // Subtiler
                     if (sameLanPeers.isNotEmpty) ...[
                       const Padding(
                         padding: EdgeInsets.symmetric(horizontal: 16),
-                        child: Text("SAME NETWORK (P2P)", style: TextStyle(color: Color(0xFF00FF41), fontWeight: FontWeight.bold)),
+                        // P2P ist Primary (Cyan)
+                        child: Text("SAME NETWORK (P2P)", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
                       ),
                       _buildPeerList(sameLanPeers),
                     ],
@@ -400,17 +404,18 @@ Future<void> _pickAndSendFiles() async {
                       const SizedBox(height: 16),
                       const Padding(
                         padding: EdgeInsets.symmetric(horizontal: 16),
-                        child: Text("ONLINE (RELAY ONLY)", style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
+                        // Relay ist jetzt Accent (Türkis) statt Orange
+                        child: Text("ONLINE (RELAY ONLY)", style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold)),
                       ),
                       _buildPeerList(otherPeers),
                     ],
                     if (_peers.isEmpty)
                       const Padding(
                         padding: EdgeInsets.all(32),
-                        child: Center(child: Text("No devices detected...", style: TextStyle(color: Colors.grey))),
+                        child: Center(child: Text("No devices detected...", style: TextStyle(color: AppColors.textDim))),
                       ),
                     _buildActionButtons(),
-                    const Divider(),
+                    const Divider(color: Colors.white10),
                     _buildActivityLog(),
                   ],
                 ),
@@ -426,28 +431,31 @@ Future<void> _pickAndSendFiles() async {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
-      color: const Color(0xFF0F0F0F),
+      color: AppColors.surface, // ✅ Surface Farbe
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Text("DATALINK", style: TextStyle(color: Color(0xFF00FF41), fontSize: 18, fontWeight: FontWeight.bold)),
+              const Text("DATALINK", style: TextStyle(color: AppColors.primary, fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(width: 12),
               Container(
                 width: 8,
                 height: 8,
                 decoration: BoxDecoration(
-                  color: _isConnected ? const Color(0xFF00FF41) : Colors.red,
+                  // Status: Cyan (Online) oder Warning (Offline)
+                  color: _isConnected ? AppColors.primary : AppColors.warning,
                   shape: BoxShape.circle,
-                  boxShadow: _isConnected ? [BoxShadow(color: const Color(0xFF00FF41).withValues(alpha: 0.5), blurRadius: 8, spreadRadius: 2)] : null,
+                  boxShadow: _isConnected 
+                      ? [BoxShadow(color: AppColors.primary.withValues(alpha: 0.5), blurRadius: 8, spreadRadius: 2)] 
+                      : null,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 4),
-          Text("ID: ${widget.clientId}", style: const TextStyle(color: Colors.grey, fontSize: 10)),
-          Text("P2P IP: ${_datalink.myLocalIp}:${_datalink.localServerPort}", style: const TextStyle(color: Colors.grey, fontSize: 10)),
+          Text("ID: ${widget.clientId}", style: const TextStyle(color: AppColors.textDim, fontSize: 10)),
+          Text("P2P IP: ${_datalink.myLocalIp}:${_datalink.localServerPort}", style: const TextStyle(color: AppColors.textDim, fontSize: 10)),
         ],
       ),
     );
@@ -456,11 +464,11 @@ Future<void> _pickAndSendFiles() async {
   Widget _buildPathSelector() {
     return Container(
       padding: const EdgeInsets.all(16),
-      color: const Color(0xFF0A0A0A),
+      color: AppColors.card, // ✅ Card Farbe
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text("DOWNLOAD LOCATION", style: TextStyle(color: Color(0xFF00FF41), fontWeight: FontWeight.bold)),
+          const Text("DOWNLOAD LOCATION", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
           _buildPathOption("DEFAULT", "System Downloads", _systemDownloadPath ?? ""),
           ..._customPaths.map((path) => _buildPathOption(path, p.basename(path), path, isCustom: true)),
@@ -468,7 +476,10 @@ Future<void> _pickAndSendFiles() async {
             onPressed: _addCustomPath,
             icon: const Icon(Icons.add, size: 14),
             label: const Text("ADD PATH"),
-            style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF00FF41)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              side: const BorderSide(color: AppColors.primary),
+            ),
           ),
         ],
       ),
@@ -486,25 +497,30 @@ Future<void> _pickAndSendFiles() async {
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF00FF41).withValues(alpha: 0.1) : const Color(0xFF151515),
-          border: Border.all(color: isSelected ? const Color(0xFF00FF41) : Colors.grey.withValues(alpha: 0.3)),
+          color: isSelected ? AppColors.primary.withValues(alpha: 0.1) : AppColors.surface,
+          border: Border.all(
+            color: isSelected ? AppColors.primary : AppColors.textDim.withValues(alpha: 0.3)
+          ),
         ),
         child: Row(
           children: [
-            Icon(isSelected ? Icons.radio_button_checked : Icons.radio_button_unchecked, color: isSelected ? const Color(0xFF00FF41) : Colors.grey),
+            Icon(
+              isSelected ? Icons.radio_button_checked : Icons.radio_button_unchecked, 
+              color: isSelected ? AppColors.primary : AppColors.textDim
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(label, style: TextStyle(fontWeight: FontWeight.bold, color: isSelected ? const Color(0xFF00FF41) : Colors.white)),
-                  Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 10)),
+                  Text(label, style: TextStyle(fontWeight: FontWeight.bold, color: isSelected ? AppColors.primary : Colors.white)),
+                  Text(subtitle, style: const TextStyle(color: AppColors.textDim, fontSize: 10)),
                 ],
               ),
             ),
             if (isCustom)
               IconButton(
-                icon: const Icon(Icons.delete, color: Colors.red, size: 16),
+                icon: const Icon(Icons.delete, color: AppColors.warning, size: 16),
                 onPressed: () => _removeCustomPath(value),
               ),
           ],
@@ -523,6 +539,8 @@ Future<void> _pickAndSendFiles() async {
         itemBuilder: (context, index) {
           final peer = peers[index];
           final isSelected = _selectedPeerIds.contains(peer.id);
+          // Farbe basierend auf Typ (P2P = Primary, Relay = Accent)
+          final activeColor = peer.isSameLan ? AppColors.primary : AppColors.accent;
           
           return GestureDetector(
             onTap: () {
@@ -535,13 +553,13 @@ Future<void> _pickAndSendFiles() async {
               width: 90,
               margin: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: isSelected ? const Color(0xFF00FF41).withValues(alpha: 0.2) : const Color(0xFF111111),
-                border: Border.all(color: isSelected ? const Color(0xFF00FF41) : Colors.grey),
+                color: isSelected ? activeColor.withValues(alpha: 0.2) : AppColors.card,
+                border: Border.all(color: isSelected ? activeColor : AppColors.textDim),
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(_getDeviceIcon(peer.type), color: isSelected ? Colors.white : Colors.grey),
+                  Icon(_getDeviceIcon(peer.type), color: isSelected ? Colors.white : AppColors.textDim),
                   const SizedBox(height: 4),
                   Text(peer.name, style: const TextStyle(fontSize: 10), textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
                 ],
@@ -565,37 +583,33 @@ Future<void> _pickAndSendFiles() async {
   }
 
   Widget _buildActionButtons() {
-  return Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-    child: Row(
-      children: [
-        // LINKER BUTTON (Neigung nach Rechts / )
-        Expanded(
-          child: ParallelogramButton(
-            text: "FILES",
-            icon: Icons.file_copy,
-            onTap: _pickAndSendFiles,
-            color: AppColors.accent,
-            skew: 0.3, //  Positiv = /
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: Row(
+        children: [
+          Expanded(
+            child: ParallelogramButton(
+              text: "FILES",
+              icon: Icons.file_copy,
+              onTap: _pickAndSendFiles,
+              color: AppColors.primary, // ✅ Cyan
+              skew: 0.3,
+            ),
           ),
-        ),
-        
-        const SizedBox(width: 15),
-        
-        // RECHTER BUTTON (Neigung nach Links \ )
-        Expanded(
-          child: ParallelogramButton(
-            text: "FOLDER",
-            icon: Icons.folder,
-            onTap: _pickAndSendFolder,
-            color: AppColors.accent, // Oder AppColors.warning
-            skew: -0.3, //  Negativ = \ (Achte auf das MINUS)
+          const SizedBox(width: 15),
+          Expanded(
+            child: ParallelogramButton(
+              text: "FOLDER",
+              icon: Icons.folder,
+              onTap: _pickAndSendFolder,
+              color: AppColors.accent, // ✅ Türkis
+              skew: -0.3,
+            ),
           ),
-        ),
-      ],
-    ),
-  );
-}
+        ],
+      ),
+    );
+  }
 
   Widget _buildActivityLog() {
     return Column(
@@ -603,7 +617,7 @@ Future<void> _pickAndSendFiles() async {
       children: [
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Text("ACTIVITY LOG", style: TextStyle(color: Color(0xFF00FF41), fontWeight: FontWeight.bold)),
+          child: Text("ACTIVITY LOG", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold)),
         ),
         const SizedBox(height: 8),
         
@@ -633,13 +647,13 @@ Future<void> _pickAndSendFiles() async {
     
     if (transfer.isCompleted) {
       icon = Icons.check_circle;
-      iconColor = const Color(0xFF00FF41);
+      iconColor = AppColors.primary; // ✅ Cyan
     } else if (transfer.isFailed) {
       icon = Icons.error;
-      iconColor = Colors.red;
+      iconColor = AppColors.warning; // ✅ Pink
     } else {
       icon = Icons.sync;
-      iconColor = Colors.orange;
+      iconColor = AppColors.accent; // ✅ Türkis (statt Orange)
     }
 
     return ListTile(
@@ -650,10 +664,11 @@ Future<void> _pickAndSendFiles() async {
       title: Text(transfer.fileName, style: const TextStyle(fontSize: 18), maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(
         transfer.isCompleted ? "Complete • ${transfer.sizeFormatted}" : transfer.isFailed ? "Failed" : "${transfer.status.name} • ${transfer.progressFormatted}",
-        style: TextStyle(color: transfer.isCompleted ? const Color(0xFF00FF41) : Colors.grey, fontSize: 13),
+        // Success -> Cyan, sonst Grau
+        style: TextStyle(color: transfer.isCompleted ? AppColors.primary : AppColors.textDim, fontSize: 13),
       ),
       trailing: transfer.isActive
-          ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(value: transfer.progress, strokeWidth: 2, color: const Color(0xFF00FF41)))
+          ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(value: transfer.progress, strokeWidth: 2, color: AppColors.accent))
           : null,
     );
   }
