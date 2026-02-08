@@ -771,59 +771,62 @@ class _FileVaultView extends StatelessWidget {
       },
       child: Scaffold(
         backgroundColor: Colors.transparent, 
-        body: Stack(
-          children: [
-            Column(
-              children: [
-                _buildHeader(context, controller),
-                
-                if (controller.isLoading)
-                  const LinearProgressIndicator(
-                    backgroundColor: AppColors.background,
-                    color: AppColors.primary,
-                    minHeight: 2,
-                  ),
+        body: SafeArea( // <--- HIER NEU: SafeArea
+          child: Stack(
+            children: [
+              Column(
+                children: [
+                  _buildHeader(context, controller),
+                  
+                  // ... (ProgressIndicator, ErrorMessage, ListView wie bisher) ...
+                  if (controller.isLoading)
+                    const LinearProgressIndicator(
+                      backgroundColor: AppColors.background,
+                      color: AppColors.primary,
+                      minHeight: 2,
+                    ),
 
-                if (controller.errorMessage != null)
-                   Container(
-                     padding: const EdgeInsets.all(8),
-                     color: Colors.red.withValues(alpha: 0.2), 
-                     width: double.infinity,
-                     child: Text(
-                       controller.errorMessage!, 
-                       style: const TextStyle(color: Colors.red),
-                       textAlign: TextAlign.center,
+                  if (controller.errorMessage != null)
+                     Container(
+                       padding: const EdgeInsets.all(8),
+                       color: AppColors.warning.withValues(alpha: 0.2), 
+                       width: double.infinity,
+                       child: Text(
+                         controller.errorMessage!, 
+                         style: const TextStyle(color: AppColors.warning),
+                         textAlign: TextAlign.center,
+                       ),
                      ),
-                   ),
 
-                Expanded(
-                  child: controller.displayFiles.isEmpty && !controller.isLoading && controller.errorMessage == null
-                    ? Center(
-                        child: Text(
-                          controller.searchQuery.isEmpty ? "NO DATA STREAM" : "NO MATCH FOUND", 
-                          style: const TextStyle(color: AppColors.textDim, letterSpacing: 2)
+                  Expanded(
+                    child: controller.displayFiles.isEmpty && !controller.isLoading && controller.errorMessage == null
+                      ? Center(
+                          child: Text(
+                            controller.searchQuery.isEmpty ? "NO DATA STREAM" : "NO MATCH FOUND", 
+                            style: const TextStyle(color: AppColors.textDim, letterSpacing: 2)
+                          )
                         )
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.only(top: 8, bottom: 100),
-                        itemCount: controller.displayFiles.length,
-                        itemBuilder: (context, index) {
-                          return _buildFileItem(context, controller, controller.displayFiles[index]);
-                        },
-                      ),
-                ),
-              ],
-            ),
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOutExpo,
-              // ✅ FIX: Zeige Leiste auch an, wenn wir etwas einfügen können!
-              bottom: (controller.isSelectionMode || controller.canPaste) ? 20 : -100,
-              left: 20,
-              right: 20,
-              child: _buildActionBar(context, controller),
-            ),
-          ],
+                      : ListView.builder(
+                          padding: const EdgeInsets.only(top: 8, bottom: 100),
+                          itemCount: controller.displayFiles.length,
+                          itemBuilder: (context, index) {
+                            return _buildFileItem(context, controller, controller.displayFiles[index]);
+                          },
+                        ),
+                  ),
+                ],
+              ),
+              // ... (Action Bar Positioned bleibt gleich) ...
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOutExpo,
+                bottom: (controller.isSelectionMode || controller.canPaste) ? 20 : -100,
+                left: 20,
+                right: 20,
+                child: _buildActionBar(context, controller),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -880,9 +883,12 @@ class _FileVaultView extends StatelessWidget {
   }
 
   Widget _buildHeader(BuildContext context, FileVaultController controller) {
+    // Wenn Suche aktiv ist, zeigen wir nur die SearchBar (diese hat ihren eigenen Style)
     if (controller.isSearching) {
       return _buildSearchBar(context, controller);
     }
+
+    // Breadcrumbs bauen (wie vorher)
     List<Widget> breadcrumbs = [];
     breadcrumbs.add(
       Padding(
@@ -909,49 +915,75 @@ class _FileVaultView extends StatelessWidget {
         )
       );
     }
+
+    // Neuer Header Container
     return Container(
-      padding: const EdgeInsets.only(top: 50, bottom: 10, left: 10, right: 10),
-      color: AppColors.card.withValues(alpha: 0.5),
+      // Padding oben entfernt, da wir jetzt SafeArea nutzen
+      padding: const EdgeInsets.only(top: 0, bottom: 10, left: 0, right: 0),
+      color: AppColors.surface, // Dunkler Hintergrund für den ganzen Header-Bereich
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(children: breadcrumbs),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.upload_file, color: AppColors.primary),
-                onPressed: () => controller.uploadFile(),
-                tooltip: "UPLOAD HERE",
-              ),
-              IconButton(
-                icon: const Icon(Icons.sort, color: AppColors.accent), // <-- NEU
-                onPressed: () => _showSortMenu(context, controller),
-              ),
-              IconButton(
-                icon: const Icon(Icons.search, color: AppColors.primary),
-                onPressed: () => controller.toggleSearch(),
-              ),
-            ],
+          
+          // 1. NEU: FILEVAULT TITEL ZEILE
+          Container(
+            padding: const EdgeInsets.all(12),
+            child: const Row(
+              children: [
+                Text("FILEVAULT", style: TextStyle(color: AppColors.primary, fontSize: 18, fontWeight: FontWeight.bold)),
+                SizedBox(width: 12),
+                // Status Dot (Optional: Zeigt an ob Verbindung da ist, hier einfach statisch Primary da Vault online ist)
+                Icon(Icons.circle, size: 8, color: AppColors.primary), 
+              ],
+            ),
           ),
-          const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                "${controller.files.length} NODES • ${controller.currentPath}",
-                style: const TextStyle(color: AppColors.textDim, fontSize: 10, letterSpacing: 1.5),
-              ),
-              if (controller.isSelectionMode)
-                Text(
-                  "${controller.selectedNodes.length} SELECTED",
-                  style: const TextStyle(color: AppColors.primary, fontSize: 10, fontWeight: FontWeight.bold),
+
+          // 2. EXISTIERENDE STEUERUNG (Breadcrumbs & Buttons)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(children: breadcrumbs),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.upload_file, color: AppColors.primary),
+                      onPressed: () => controller.uploadFile(),
+                      tooltip: "UPLOAD HERE",
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.sort, color: AppColors.accent),
+                      onPressed: () => _showSortMenu(context, controller),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.search, color: AppColors.primary),
+                      onPressed: () => controller.toggleSearch(),
+                    ),
+                  ],
                 ),
-            ],
+                const SizedBox(height: 10),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      "${controller.files.length} NODES • ${controller.currentPath}",
+                      style: const TextStyle(color: AppColors.textDim, fontSize: 10, letterSpacing: 1.5),
+                    ),
+                    if (controller.isSelectionMode)
+                      Text(
+                        "${controller.selectedNodes.length} SELECTED",
+                        style: const TextStyle(color: AppColors.primary, fontSize: 10, fontWeight: FontWeight.bold),
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ],
       ),

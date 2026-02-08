@@ -303,166 +303,180 @@ class _SharedClipboardScreenState extends State<SharedClipboardScreen> with Widg
   // ===========================================================================
   // UI BUILD
   // ===========================================================================
-  @override
+@override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.transparent, // Transparent für SciFiBackground
-      appBar: AppBar(
-        title: const Text("SYNCPASTE"),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: Icon(
-              _autoSync ? Icons.sync : Icons.sync_disabled,
-              color: _autoSync ? AppColors.primary : Colors.grey,
-            ),
-            onPressed: () {
-              setState(() => _autoSync = !_autoSync);
-              _saveSettings();
-            },
-          ),
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.only(right: 16),
-              child: Text(
-                _isConnected ? "ONLINE" : "OFFLINE",
-                style: TextStyle(
-                  color: _isConnected ? AppColors.primary : AppColors.warning,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 10,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // INFO HEADER (TechCard)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: TechCard(
-              borderColor: AppColors.accent.withValues(alpha: 0.3),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      // KEINE AppBar mehr hier!
+      body: SafeArea(
+        child: Column(
+          children: [
+            // 1. NEUER HEADER (Wie bei DataLink)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              color: AppColors.surface,
+              child: Row(
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text("DEVICE ID", style: TextStyle(color: AppColors.textDim, fontSize: 10)),
-                      Text(widget.deviceName, style: const TextStyle(color: AppColors.textMain, fontWeight: FontWeight.bold)),
-                    ],
+                  const Text("SYNCPASTE", style: TextStyle(color: AppColors.primary, fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(width: 12),
+                  // Status Dot
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: _isConnected ? AppColors.primary : AppColors.warning,
+                      shape: BoxShape.circle,
+                      boxShadow: _isConnected 
+                          ? [BoxShadow(color: AppColors.primary.withValues(alpha: 0.5), blurRadius: 8, spreadRadius: 2)] 
+                          : null,
+                    ),
                   ),
-                  const Divider(color: Colors.white10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          _autoSync ? "AUTO-SYNC: ACTIVE" : "AUTO-SYNC: PAUSED",
-                          style: TextStyle(color: _autoSync ? AppColors.primary : Colors.grey, fontSize: 12, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text("AUTO-COPY ", style: TextStyle(color: Colors.grey, fontSize: 12)),
-                          Switch(
-                            value: _autoCopyMode,
-                            onChanged: (val) {
-                              setState(() => _autoCopyMode = val);
-                              _saveSettings();
-                            },
-                            activeThumbColor: AppColors.primary,
-                            inactiveThumbColor: Colors.grey,
-                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                        ],
-                      ),
-                    ],
+                  const Spacer(),
+                  // Sync Button (war vorher in der AppBar)
+                  IconButton(
+                    icon: Icon(
+                      _autoSync ? Icons.sync : Icons.sync_disabled,
+                      color: _autoSync ? AppColors.primary : Colors.grey,
+                    ),
+                    onPressed: () {
+                      setState(() => _autoSync = !_autoSync);
+                      _saveSettings();
+                    },
+                    tooltip: "Auto-Sync Toggle",
                   ),
                 ],
               ),
             ),
-          ),
 
-          // DROPDOWN FILTER
-          if (_availableDevices.length > 1)
+            // 2. INFO HEADER (TechCard) - bleibt gleich
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: TechCard(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 borderColor: AppColors.accent.withValues(alpha: 0.3),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _selectedDeviceFilter,
-                    dropdownColor: AppColors.card,
-                    isExpanded: true,
-                    style: const TextStyle(color: AppColors.textMain),
-                    icon: const Icon(Icons.arrow_drop_down, color: AppColors.accent),
-                    items: [
-                      DropdownMenuItem(
-                        value: "all",
-                        child: Text("ALL SIGNALS (${_clipboardEntries.length})"),
-                      ),
-                      ..._availableDevices.map((id) => DropdownMenuItem(
-                        value: id,
-                        child: Text("${_getDeviceName(id).toUpperCase()}"),
-                      )),
-                    ],
-                    onChanged: (v) => setState(() => _selectedDeviceFilter = v ?? "all"),
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("DEVICE ID", style: TextStyle(color: AppColors.textDim, fontSize: 10)),
+                        Text(widget.deviceName, style: const TextStyle(color: AppColors.textMain, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    const Divider(color: Colors.white10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _autoSync ? "AUTO-SYNC: ACTIVE" : "AUTO-SYNC: PAUSED",
+                            style: TextStyle(color: _autoSync ? AppColors.primary : Colors.grey, fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text("AUTO-COPY ", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                            Switch(
+                              value: _autoCopyMode,
+                              onChanged: (val) {
+                                setState(() => _autoCopyMode = val);
+                                _saveSettings();
+                              },
+                              activeColor: AppColors.primary,
+                              activeTrackColor: AppColors.primary.withValues(alpha: 0.3),
+                              inactiveThumbColor: Colors.grey,
+                              inactiveTrackColor: Colors.grey.withValues(alpha: 0.3),
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ),
 
-          // ACTIONS (Parallelogram Buttons)
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: ParallelogramButton(
-                    text: "PUSH NOW",
-                    icon: Icons.upload,
-                    onTap: _manualPush,
-                    color: AppColors.accent,
-                    skew: 0.3, // Neigung nach Rechts
-                  ),
-                ),
-                const SizedBox(width: 15),
-                Expanded(
-                  child: ParallelogramButton(
-                    text: "CLEAR MINE",
-                    icon: Icons.delete_sweep,
-                    onTap: _clearMyHistory,
-                    color: AppColors.warning,
-                    skew: -0.3, // Neigung nach Links
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const Divider(color: Colors.white10),
-
-          // LISTE (TechCards)
-          Expanded(
-            child: _filteredEntries.isEmpty
-                ? Center(
-                    child: Text(
-                      "NO DATA STREAM",
-                      style: TextStyle(color: AppColors.textDim, letterSpacing: 2),
+            // ... (Rest bleibt gleich: Filter, Buttons, Liste) ...
+            
+            // DROPDOWN FILTER
+            if (_availableDevices.length > 1)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: TechCard(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  borderColor: AppColors.accent.withValues(alpha: 0.3),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _selectedDeviceFilter,
+                      dropdownColor: AppColors.card,
+                      isExpanded: true,
+                      style: const TextStyle(color: AppColors.textMain),
+                      icon: const Icon(Icons.arrow_drop_down, color: AppColors.accent),
+                      items: [
+                        DropdownMenuItem(
+                          value: "all",
+                          child: Text("ALL SIGNALS (${_clipboardEntries.length})"),
+                        ),
+                        ..._availableDevices.map((id) => DropdownMenuItem(
+                          value: id,
+                          child: Text("${_getDeviceName(id).toUpperCase()}"),
+                        )),
+                      ],
+                      onChanged: (v) => setState(() => _selectedDeviceFilter = v ?? "all"),
                     ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(8),
-                    itemCount: _filteredEntries.length,
-                    itemBuilder: (context, index) => _buildClipboardCard(_filteredEntries[index]),
                   ),
-          ),
-        ],
+                ),
+              ),
+
+            // ACTIONS
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ParallelogramButton(
+                      text: "PUSH NOW",
+                      icon: Icons.upload,
+                      onTap: _manualPush,
+                      color: AppColors.accent,
+                      skew: 0.3, 
+                    ),
+                  ),
+                  const SizedBox(width: 15),
+                  Expanded(
+                    child: ParallelogramButton(
+                      text: "CLEAR MINE",
+                      icon: Icons.delete_sweep,
+                      onTap: _clearMyHistory,
+                      color: AppColors.warning,
+                      skew: -0.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const Divider(color: Colors.white10),
+
+            // LISTE
+            Expanded(
+              child: _filteredEntries.isEmpty
+                  ? const Center(
+                      child: Text(
+                        "NO DATA STREAM",
+                        style: TextStyle(color: AppColors.textDim, letterSpacing: 2),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(8),
+                      itemCount: _filteredEntries.length,
+                      itemBuilder: (context, index) => _buildClipboardCard(_filteredEntries[index]),
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
