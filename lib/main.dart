@@ -17,6 +17,7 @@ import 'services/heartbeat_service.dart';
 import 'config/server_config.dart';
 
 import 'ui/theme_constants.dart';
+import 'layout/responsive_shell.dart';
 import 'ui/scifi_background.dart';
 
 void main() async {
@@ -63,7 +64,6 @@ class MainSystemShell extends StatefulWidget {
 }
 
 class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingObserver {
-  int _currentIndex = 0;
   late String _myClientId;
   String _myDeviceName = "Init...";
   bool _isInitializing = true;
@@ -158,41 +158,17 @@ class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingOb
       return const Scaffold(
         backgroundColor: Color(0xFF050505),
         body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(color: Color(0xFF00FF41)),
-              SizedBox(height: 20),
-              Text(
-                "Initializing QualityLink...",
-                style: TextStyle(color: Color(0xFF00FF41), fontSize: 16),
-              ),
-            ],
-          ),
+          child: CircularProgressIndicator(color: Color(0xFF00FF41)),
         ),
       );
     }
     
-    final List<Widget> screens = [
-      DataLinkScreen(clientId: _myClientId, deviceName: _myDeviceName),
-      SharedClipboardScreen(clientId: _myClientId, deviceName: _myDeviceName),
-      // UPDATE: Wir geben die ID und den Namen weiter!
-      NetworkStorageScreen(myClientId: _myClientId, myDeviceName: _myDeviceName),
-      const SystemMonitorScreen(),
-    ];
-
-    return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: screens),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        onTap: (index) => setState(() => _currentIndex = index),
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.import_export), label: "DATALINK"),
-          BottomNavigationBarItem(icon: Icon(Icons.content_paste), label: "SYNCPASTE"),
-          BottomNavigationBarItem(icon: Icon(Icons.storage), label: "FILEVAULT"),
-          BottomNavigationBarItem(icon: Icon(Icons.terminal), label: "SYSTEMPULSE"),
-        ],
-      ),
+    // 🔥 HIER IST DIE ÄNDERUNG:
+    // Statt selbst ein Scaffold/IndexedStack zu bauen, rufst du nur noch die Shell auf.
+    return ResponsiveShell(
+      clientId: _myClientId,
+      deviceName: _myDeviceName,
     );
   }
 }
+

@@ -201,38 +201,90 @@ class FileVaultController extends ChangeNotifier {
   Future<void> pasteFiles() async {
     if (_clipboardNodes.isEmpty) return;
     
-    // Ziel ist aktueller Ordner (außer wir sind im Root)
-    if (currentPath == "ROOT" || currentPath == "Drives") {
-      errorMessage = "Cannot paste here.";
-      return;
-    }
+    // Zielpfad bestimmen
+    String destination = (currentPath == "ROOT" || currentPath == "Drives") 
+        ? "" // Root = Standard Download Ordner
+        : currentPath;
 
     _setLoading(true);
-    final action = _isMoveOperation ? "move" : "copy";
+    
+    // Warnung bei Cross-Device Move (Sicherheitshalber als Copy behandeln)
+    if (_isMoveOperation && _clipboardNodes.first.deviceId != currentDeviceId) {
+       print("⚠️ Cross-device move treated as copy for safety.");
+    }
+
+    // Bestimmen, ob Move oder Copy (nur lokal ist Move echt)
+    final action = (_isMoveOperation && _clipboardNodes.first.deviceId == currentDeviceId) 
+        ? "move" 
+        : "copy";
+
+    int crossDeviceCount = 0;
 
     for (var node in _clipboardNodes) {
       try {
-        // Gleiches Gerät? -> Remote Befehl
+        // FALL 1: LOKALE OPERATION (PC zu PC / Handy zu Handy)
         if (node.deviceId == currentDeviceId) {
           await _sendCommandToRelay(action, {
             "path": node.path,
-            "destination": currentPath
+            "destination": destination
           });
         } 
-        // Anderes Gerät? -> Cross-Device Transfer (Upload)
-        else {
-           // Das ist komplexer (Phase 4). Für jetzt: Nur Meldung.
-           errorMessage = "Cross-device copy not yet supported (use Download/Upload)";
+        
+        // FALL 2: UPLOAD (Ich -> Remote)
+        // Die Datei liegt bei MIR (myClientId) und soll woanders hin
+        else if (node.deviceId == myClientId) {
+           print("🚀 Uploading ${node.name} to $currentDeviceId");
+           
+           // ✅ FIX: Unterscheidung zwischen Datei und Ordner!
+           if (node.isDirectory) {
+             await DataLinkService().sendFolder(
+               Directory(node.path), 
+               [currentDeviceId]
+               // Hinweis: Zielpfad bei Ordnern wird aktuell oft im Root des Ziels entpackt
+             );
+           } else {
+             await DataLinkService().sendFile(
+               File(node.path), 
+               [currentDeviceId], 
+               destinationPath: destination
+             );
+           }
+           crossDeviceCount++;
         }
+        
+        // FALL 3: DOWNLOAD (Remote -> Ich)
+        // Ich bin im lokalen Ordner (currentDeviceId == myClientId) und hole von Remote
+        else if (currentDeviceId == myClientId) {
+           print("⬇️ Requesting ${node.name} from ${node.deviceId}");
+           await _sendCommandToRelay("request_transfer", {
+             "path": node.path,
+             "requester_id": myClientId,
+             "destination_path": destination // Sag dem Sender, wo ich es hinhaben will!
+           });
+           crossDeviceCount++;
+        }
+        
+        // FALL 4: REMOTE A -> REMOTE B (Noch nicht unterstützt)
+        else {
+           errorMessage = "Remote-to-Remote copy not yet supported.";
+        }
+
       } catch (e) {
         errorMessage = "Paste Failed: $e";
+        print("❌ Paste Error: $e");
       }
     }
 
-    // Wenn es Move war, Clipboard leeren
-    if (_isMoveOperation) _clipboardNodes.clear();
+    // Clipboard nur leeren, wenn es ein echter Move auf dem gleichen Gerät war
+    if (_isMoveOperation && _clipboardNodes.isNotEmpty && _clipboardNodes.first.deviceId == currentDeviceId) {
+      _clipboardNodes.clear();
+    }
     
-    // Kurz warten und refresh
+    if (crossDeviceCount > 0) {
+      errorMessage = "STARTED $crossDeviceCount TRANSFERS";
+      Future.delayed(const Duration(seconds: 2), () => errorMessage = null);
+    }
+
     await Future.delayed(const Duration(seconds: 1));
     _setLoading(false);
     _loadRemotePath(currentDeviceId, currentPath);
