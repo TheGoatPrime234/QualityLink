@@ -70,7 +70,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         children: [
           // 1. Die "Toolbar" (Seitenleiste)
           NavigationRail(
-            backgroundColor: AppColors.card.withOpacity(0.8),
+            backgroundColor: AppColors.card.withValues(alpha: 0.8),
             extended: _isRailExtended, // Hier steuern wir "einfahrbar"
             selectedIndex: _currentIndex,
             onDestinationSelected: (index) => setState(() => _currentIndex = index),
@@ -102,14 +102,15 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
               ),
             ],
             // Styling für Sci-Fi Look
-            selectedIconTheme: const IconThemeData(color: AppColors.primary),
+            indicatorColor: AppColors.primary, 
+            selectedIconTheme: const IconThemeData(color: Colors.black),
             unselectedIconTheme: const IconThemeData(color: Colors.grey),
             selectedLabelTextStyle: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
             unselectedLabelTextStyle: const TextStyle(color: Colors.grey),
           ),
 
           // Vertikale Linie für Tech-Look
-          Container(width: 1, color: AppColors.primary.withOpacity(0.2)),
+          Container(width: 1, color: AppColors.primary.withValues(alpha: 0.2)),
 
           // 2. Der Inhalt + Das Icon oben rechts
           Expanded(
@@ -159,10 +160,10 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       // 2. Die "Toolbar" (Unten)
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
-          border: Border(top: BorderSide(color: AppColors.primary.withOpacity(0.2))),
+          border: Border(top: BorderSide(color: AppColors.primary.withValues(alpha: 0.2))),
         ),
         child: BottomNavigationBar(
-          backgroundColor: AppColors.card.withOpacity(0.9),
+          backgroundColor: AppColors.card.withValues(alpha: 0.9),
           currentIndex: _currentIndex,
           onTap: (index) => setState(() => _currentIndex = index),
           type: BottomNavigationBarType.fixed, // Wichtig für > 3 Items
@@ -185,8 +186,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.5),
-        border: Border.all(color: AppColors.accent.withOpacity(0.5)),
+        color: Colors.black.withValues(alpha: 0.5),
+        border: Border.all(color: AppColors.accent.withValues(alpha: 0.5)),
         borderRadius: BorderRadius.circular(8),
       ),
       child: const Icon(
