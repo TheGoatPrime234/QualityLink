@@ -239,15 +239,22 @@ class DataLinkService {
       else if (event == 'transfer_update') {
           final transferData = data['transfer'];
           
-          // 🔥 FIX 1: Wir wrappen die Daten im erwarteten 'meta'-Format
           final transfer = Transfer.fromServerResponse({
              'meta': transferData,
              'status': transferData['status'] ?? 'RELAY_READY',
              'timestamp': transferData['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
           });
           
-          // UI Update
-          _notifyTransferUpdate(transfer);
+          // 🔥 FIX 4: Transfer korrekt in die Liste eintragen/updaten, ohne "Complete" zu überschreiben
+          final existingIndex = _transfers.indexWhere((t) => t.id == transfer.id);
+          if (existingIndex != -1) {
+             if (_transfers[existingIndex].isCompleted) return; // Fertige in Ruhe lassen
+             _transfers[existingIndex] = transfer.copyWith(progress: _transfers[existingIndex].progress);
+             _notifyTransferUpdate(_transfers[existingIndex]);
+          } else {
+             _transfers.add(transfer);
+             _notifyTransferUpdate(transfer);
+          }
           
           // ENTSCHEIDUNG: Ist das für mich? Und ist es bereit?
           if (transfer.status == TransferStatus.relayReady && 
@@ -432,6 +439,14 @@ class DataLinkService {
     for (var l in _transferListeners) try { l(transfer); } catch (_) {}
   }
   void _notifyProgress(String id, double p, [String? m]) {
+    // 🔥 FIX 1: Fortschritt für die Liste unten (Activity Log) speichern!
+    final idx = _transfers.indexWhere((t) => t.id == id);
+    if (idx != -1) {
+      _transfers[idx] = _transfers[idx].copyWith(progress: p);
+      _notifyTransferUpdate(_transfers[idx]);
+    }
+
+    // UI Listener für die große Animation oben benachrichtigen
     for (var l in _progressListeners) try { l(id, p, m); } catch (_) {}
   }
   void _notifyMessage(String m, {bool isError = false}) {
@@ -484,12 +499,18 @@ class DataLinkService {
           
           if (existingIndex != -1) {
             final oldTransfer = _transfers[existingIndex];
+            
+            // 🔥 FIX 3: Wenn der Download lokal fertig ist, ignorieren wir das Server-Update!
+            // Ansonsten überschreibt der Server das "Complete" sofort wieder mit "Relay_Ready"
+            if (oldTransfer.isCompleted || oldTransfer.isFailed) continue;
+
             if (oldTransfer.status != transfer.status) {
-               _transfers[existingIndex] = transfer;
-               _notifyTransferUpdate(transfer);
+               // Lokalen Fortschritt beim Status-Wechsel beibehalten
+               _transfers[existingIndex] = transfer.copyWith(progress: oldTransfer.progress);
+               _notifyTransferUpdate(_transfers[existingIndex]);
             }
             
-            // Relay Ready Check (falls WS versagt hat)
+            // Relay Ready Check
             if (oldTransfer.status != TransferStatus.relayReady && 
                 transfer.status == TransferStatus.relayReady &&
                 !_processedTransferIds.contains(transfer.id) &&
@@ -1041,7 +1062,12 @@ class DataLinkService {
   void _updateTransferStatus(Transfer t, TransferStatus s) {
     final idx = _transfers.indexWhere((tr) => tr.id == t.id);
     if (idx != -1) {
-      final updated = t.copyWith(status: s, completedAt: s == TransferStatus.completed ? DateTime.now() : null);
+      final updated = t.copyWith(
+        status: s, 
+        completedAt: s == TransferStatus.completed ? DateTime.now() : null,
+        // 🔥 FIX 2: Wenn fertig, hart auf 100% (1.0) setzen
+        progress: s == TransferStatus.completed ? 1.0 : _transfers[idx].progress, 
+      );
       _transfers[idx] = updated;
       _notifyTransferUpdate(updated);
     }
