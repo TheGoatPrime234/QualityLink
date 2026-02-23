@@ -182,11 +182,17 @@ class Peer {
 
   static bool _isSameSubnet(String ip1, String ip2) {
     try {
+      // 🔥 FIX: Wenn beide Geräte im Tailscale/VPN-Netz (100.x.x.x) sind,
+      // können sie direkt kommunizieren. Sie gelten also als "Same LAN"!
+      if (ip1.startsWith('100.') && ip2.startsWith('100.')) {
+        return true;
+      }
+
       final parts1 = ip1.split('.');
       final parts2 = ip2.split('.');
       if (parts1.length != 4 || parts2.length != 4) return false;
       
-      // Vergleiche erste 3 Oktette (einfaches /24 Subnet)
+      // Vergleiche erste 3 Oktette (normales /24 Heim-WLAN)
       return parts1[0] == parts2[0] && 
              parts1[1] == parts2[1] && 
              parts1[2] == parts2[2];
@@ -194,8 +200,6 @@ class Peer {
       return false;
     }
   }
-
-  bool get isOnline => DateTime.now().difference(lastSeen).inSeconds < 30;
 }
 
 // =============================================================================
