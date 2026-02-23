@@ -181,10 +181,9 @@ class ClipboardTaskHandler extends TaskHandler {
                   } catch (e) {
                     print('⚠️ Cannot set clipboard in background (Android 10+)');
                   }
-
                   FlutterForegroundTask.updateService(
-                    notificationTitle: 'QualityLink Active',
-                    notificationText: '📥 New clip from ${newest['client_name'] ?? 'device'}',
+                    notificationTitle: '📥 New Clip (${newest['client_name'] ?? 'Device'})',
+                    notificationText: 'Tap to copy: ${content.substring(0, min(30, content.length))}...',
                   );
                 }
               }
