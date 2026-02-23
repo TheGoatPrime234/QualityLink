@@ -235,10 +235,16 @@ class DataLinkService {
       
       // Fall C: RELAY UPDATE (Das hat gefehlt!)
       // Der Server sagt: "Datei liegt jetzt auf der Festplatte bereit!"
+      // Fall C: RELAY UPDATE
       else if (event == 'transfer_update') {
           final transferData = data['transfer'];
-          // Wir bauen ein Transfer-Objekt aus den Daten
-          final transfer = Transfer.fromServerResponse(transferData);
+          
+          // 🔥 FIX 1: Wir wrappen die Daten im erwarteten 'meta'-Format
+          final transfer = Transfer.fromServerResponse({
+             'meta': transferData,
+             'status': transferData['status'] ?? 'RELAY_READY',
+             'timestamp': transferData['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+          });
           
           // UI Update
           _notifyTransferUpdate(transfer);
@@ -467,7 +473,13 @@ class DataLinkService {
         final List<dynamic> transferList = data['transfers'] ?? [];
         
         for (var transferData in transferList) {
-          final transfer = Transfer.fromServerResponse(transferData);
+          // 🔥 FIX 2: Auch beim Polling-Fallback die Daten richtig wrappen!
+          final transfer = Transfer.fromServerResponse({
+             'meta': transferData,
+             'status': transferData['status'] ?? 'OFFERED',
+             'timestamp': transferData['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+          });
+          
           final existingIndex = _transfers.indexWhere((t) => t.id == transfer.id);
           
           if (existingIndex != -1) {
@@ -600,6 +612,12 @@ class DataLinkService {
         transferId: transferId,
         destinationPath: destinationPath,
       );
+
+      if (targetId == "SERVER") {
+         print("⚡ Target is SERVER. Bypassing P2P, requesting direct Upload...");
+         await _requestRelay(transferId, file.path);
+         continue; // Direkt zum nächsten Gerät springen
+      }
 
       // 2. Der entscheidende Moment: P2P oder Relay?
       try {
@@ -742,23 +760,39 @@ class DataLinkService {
     _notifyProgress(transfer.id, 0.0, "Downloading (P2P)...");
 
     try {
-      final request = http.Request('GET', Uri.parse(transfer.directLink!));
-      final response = await http.Client().send(request).timeout(const Duration(seconds: 120));
+      // 🔥 FIX: HttpClient verwenden, um einen strikten Connection-Timeout zu setzen!
+      // Wenn das Gerät in einem anderen Netzwerk ist, schlägt dies in 3 Sekunden fehl 
+      // (anstatt nach 2 Minuten) und löst sofort den Cloud-Relay Fallback aus!
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 3);
 
-      if (response.statusCode != 200) throw Exception("HTTP ${response.statusCode}");
+      final request = await client.getUrl(Uri.parse(transfer.directLink!));
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        throw Exception("HTTP ${response.statusCode}");
+      }
 
       final sink = targetFile.openWrite();
       int received = 0;
-      final total = response.contentLength ?? transfer.fileSize;
+      final total = response.contentLength; // Kann -1 sein, falls nicht bekannt
 
-      await for (var chunk in response.stream) {
+      await for (var chunk in response) {
         sink.add(chunk);
         received += chunk.length;
-        _notifyProgress(transfer.id, received / total, "${_formatBytes(received)} / ${_formatBytes(total)}");
+        if (total > 0) {
+          _notifyProgress(transfer.id, received / total, "${_formatBytes(received)} / ${_formatBytes(total)}");
+        } else {
+          _notifyProgress(transfer.id, 0.5, "Downloading...");
+        }
       }
+      
       await sink.close();
+      client.close();
       return true;
+      
     } catch (e) {
+      print("❌ P2P Fast-Fail triggered: $e");
       try { if (targetFile.existsSync()) await targetFile.delete(); } catch (_) {}
       return false;
     } finally {
@@ -852,16 +886,13 @@ class DataLinkService {
       // ---------------------------------------------------------
       String cleanPath = filePath.trim();
 
-      // VERSUCH 1: Ist der Pfad URL-kodiert (enthält %20 etc.)? -> Dekodieren!
       if (cleanPath.contains('%')) {
         try { cleanPath = Uri.decodeFull(cleanPath); } catch (_) {}
       }
 
-      // VERSUCH 2: Windows-Slashes normalisieren
       cleanPath = p.normalize(cleanPath);
       File file = File(cleanPath);
       
-      // VERSUCH 3: Falls nicht gefunden, Symlinks prüfen
       if (!file.existsSync()) {
         try {
            cleanPath = file.resolveSymbolicLinksSync();
@@ -869,9 +900,7 @@ class DataLinkService {
         } catch (_) {}
       }
       
-      // FINALER CHECK
       if (!file.existsSync()) {
-        // Letzter Versuch: Manchmal hilft es, den Pfad "raw" zu lassen
         file = File(filePath);
         if (!file.existsSync()) {
            throw Exception("OS Error: File not found at '$cleanPath'");
@@ -879,10 +908,9 @@ class DataLinkService {
       }
       // ---------------------------------------------------------
 
-      final fileSize = file.lengthSync(); // Hier stürzte es vorher ab
+      final fileSize = file.lengthSync();
       final fileName = p.basename(cleanPath);
       
-      // WICHTIG: Dateinamen für den Server sicher machen (ASCII only für Header)
       final safeFileName = Uri.encodeComponent(fileName);
 
       print("🚀 Uploading $fileName to Relay");
@@ -895,12 +923,15 @@ class DataLinkService {
       
       final transferIdField = '--$boundary\r\nContent-Disposition: form-data; name="transfer_id"\r\n\r\n$transferId\r\n';
       
-      // Wir senden den "sicheren" Dateinamen im Header
       final fileHeader = '--$boundary\r\nContent-Disposition: form-data; name="file"; filename="$safeFileName"\r\nContent-Type: application/octet-stream\r\n\r\n';
       final endBoundary = '\r\n--$boundary--\r\n';
       
       final totalRequestSize = utf8.encode(transferIdField + fileHeader + endBoundary).length + fileSize;
       request.contentLength = totalRequestSize;
+      
+      // 🔥 FIX 1: Die Verbindung MUSS gestartet werden, BEVOR wir die Datei in den Speicher streamen!
+      // Sonst blockiert der Arbeitsspeicher bei größeren Dateien und der Upload hängt sich auf.
+      final responseFuture = request.send();
       
       request.sink.add(utf8.encode(transferIdField));
       request.sink.add(utf8.encode(fileHeader));
@@ -911,6 +942,7 @@ class DataLinkService {
       await for (var chunk in stream) {
         request.sink.add(chunk);
         sentFileBytes += chunk.length;
+        // Updates reduzieren, um die UI flüssig zu halten
         if (sentFileBytes % (512 * 1024) == 0 || sentFileBytes == fileSize) {
            _notifyProgress(transferId, sentFileBytes / fileSize, "Uploading...");
         }
@@ -921,7 +953,9 @@ class DataLinkService {
       
       _notifyProgress(transferId, 1.0, "Finalizing..."); 
       
-      final response = await request.send();
+      // 🔥 FIX 2: Jetzt warten wir auf die Server-Antwort des Streams, der im Hintergrund hochgeladen hat
+      final response = await responseFuture;
+      
       if (response.statusCode == 200) {
         _activeOperations.remove(transferId);
         _notifyMessage("☁️ Upload completed");
