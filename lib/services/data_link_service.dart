@@ -540,7 +540,13 @@ class DataLinkService {
 
   Future<void> _startLocalServer() async {
     try {
-      _localServer = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+      // 🔥 FIX: Fester Port (8002) für P2P-Transfers
+      try {
+        _localServer = await HttpServer.bind(InternetAddress.anyIPv4, 8002);
+      } catch (e) {
+        _localServer = await HttpServer.bind(InternetAddress.anyIPv4, 0); // Fallback
+      }
+      
       print("🌐 Local P2P server started on port ${_localServer!.port}");
       _localServer!.listen((request) async => await _handleP2PRequest(request));
     } catch (e) {

@@ -122,32 +122,38 @@ class HeartbeatService {
     try {
       _localIp = "0.0.0.0";
       
-      for (var interface in await NetworkInterface.list()) {
+      // Holt alle Netzwerk-Schnittstellen (WLAN, LAN, VPN, etc.)
+      final interfaces = await NetworkInterface.list();
+      
+      for (var interface in interfaces) {
         for (var addr in interface.addresses) {
           if (addr.type == InternetAddressType.IPv4 && !addr.address.startsWith("127.")) {
-            if (addr.address.startsWith("192.168.")) {
-              _localIp = addr.address;
-              return;
-            } else if (addr.address.startsWith("10.") || addr.address.startsWith("172.")) {
-              if (_localIp == "0.0.0.0") {
-                _localIp = addr.address;
-              }
+            final ip = addr.address;
+            
+            // 🔥 FIX: Wenn das Gerät eine Tailscale/VPN IP (100.x.x.x) hat, 
+            // ist das unsere absolute Prio 1!
+            if (ip.startsWith("100.")) {
+              _localIp = ip;
+              print("🌍 VPN/Tailscale IP detected: $_localIp");
+              return; // Wir haben den Jackpot, direkt abbrechen!
+            }
+            
+            // Prio 2: Normales WLAN (192.168.x.x)
+            if (ip.startsWith("192.168.") && _localIp == "0.0.0.0") {
+              _localIp = ip;
+            }
+            // Prio 3: Andere lokale Netze (10.x.x.x oder 172.x.x.x)
+            else if ((ip.startsWith("10.") || ip.startsWith("172.")) && _localIp == "0.0.0.0") {
+              _localIp = ip;
             }
           }
         }
       }
-
-      if (_localIp == "0.0.0.0") {
-        try {
-          final socket = await Socket.connect(serverIp, int.parse(serverPort))
-              .timeout(const Duration(seconds: 5));
-          _localIp = socket.address.address;
-          socket.destroy();
-        } catch (e) {
-          _localIp = "127.0.0.1";
-        }
-      }
+      
+      print("🌍 Best local IP detected: $_localIp");
+      
     } catch (e) {
+      print("❌ Error detecting IP: $e");
       _localIp = "127.0.0.1";
     }
   }
