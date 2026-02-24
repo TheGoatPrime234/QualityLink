@@ -17,6 +17,7 @@ import '../config/server_config.dart';
 import '../ui/theme_constants.dart';
 import '../ui/tech_card.dart';
 import '../ui/parallelogram_button.dart';
+import '../ui/global_topbar.dart';
 import '../ui/scifi_background.dart';
 
 // =============================================================================
@@ -35,7 +36,8 @@ class VfsNode {
   final int modified;
   final VfsNodeType type;
   bool isSelected = false;
-
+  
+  final String? downloadUrl; // 🔥 NEU: URL für das Thumbnail
 
   VfsNode({
     required this.name,
@@ -46,6 +48,7 @@ class VfsNode {
     this.size = 0,
     this.modified = 0,
     this.isSelected = false,
+    this.downloadUrl, // 🔥 NEU
   }) : type = _determineType(name, isDirectory, path);
 
   static VfsNodeType _determineType(String name, bool isDir, String path) {
@@ -110,6 +113,13 @@ class FileVaultController extends ChangeNotifier {
   String myDeviceName = "";
   List<VfsNode> _clipboardNodes = [];
   bool _isMoveOperation = false;
+  bool showThumbnails = true; // 🔥 NEU: Eco-Mode Schalter
+
+  // 🔥 NEU: Methode zum Umschalten
+  void toggleThumbnails() {
+    showThumbnails = !showThumbnails;
+    notifyListeners();
+  }
 
   SortOption currentSort = SortOption.name; // ✅ Hier gehören sie hin!
   bool sortAscending = true;
@@ -706,6 +716,8 @@ class FileVaultController extends ChangeNotifier {
               isDirectory: f['is_directory'],
               size: f['size'] ?? 0,
               modified: f['modified'] ?? 0,
+              // 🔥 NEU: Wir bauen die direkte Download-URL für das Bild zusammen!
+              downloadUrl: 'http://$ip:$port/files/download?path=${Uri.encodeComponent(f['path'])}',
             )).toList();
           }
         } else {
@@ -914,16 +926,42 @@ class _FileVaultView extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 1. TITEL ZEILE
-          Container(
-            padding: const EdgeInsets.all(12),
-            child: const Row(
-              children: [
-                Text("FILEVAULT", style: TextStyle(color: AppColors.primary, fontSize: 18, fontWeight: FontWeight.bold)),
-                SizedBox(width: 12),
-                Icon(Icons.circle, size: 8, color: AppColors.primary), 
-              ],
-            ),
+          
+          // 1. 🔥 HIER WIRD DIE ALTE TITEL-ZEILE DURCH DIE NEUE STICKY TOPBAR ERSETZT
+          GlobalTopbar(
+            title: "FILEVAULT",
+            statusColor: controller.errorMessage == null ? AppColors.primary : AppColors.warning,
+            subtitle1: "NETWORK STORAGE",
+            subtitle2: "TAP GEAR FOR ECO MODE",
+            onSettingsTap: () {
+              // Eco-Mode Menü öffnen
+              showModalBottomSheet(
+                context: context,
+                backgroundColor: AppColors.card,
+                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+                builder: (ctx) => Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("VAULT SETTINGS", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 16)),
+                      const SizedBox(height: 20),
+                      SwitchListTile(
+                        title: const Text("Load Image Thumbnails", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        subtitle: const Text("Turn off to save mobile data & battery", style: TextStyle(color: AppColors.textDim, fontSize: 12)),
+                        activeColor: AppColors.primary,
+                        value: controller.showThumbnails,
+                        onChanged: (val) {
+                          controller.toggleThumbnails();
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
 
           // 2. TOOLBAR (Breadcrumbs & Actions)
@@ -956,7 +994,7 @@ class _FileVaultView extends StatelessWidget {
                       onPressed: () => controller.toggleSearch(),
                     ),
 
-                    // ✅ WICHTIG: Platzhalter für App Icon (60px)
+                    // WICHTIG: Platzhalter für App Icon (60px)
                     const SizedBox(width: 60),
                   ],
                 ),
@@ -1151,7 +1189,19 @@ class _FileVaultView extends StatelessWidget {
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(color: node.color.withValues(alpha: 0.3)),
               ),
-              child: Icon(node.icon, color: node.color, size: 20),
+              // 🔥 FIX: Hier kommt das Thumbnail hin (oder das Icon, falls Eco-Mode aktiv ist)
+              child: (node.type == VfsNodeType.image && node.downloadUrl != null && controller.showThumbnails)
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: Image.network(
+                        node.downloadUrl!,
+                        fit: BoxFit.cover,
+                        cacheWidth: 120, // 💡 EXTREM WICHTIG: Spart RAM beim Rendern!
+                        // Wenn der Download fehlschlägt, zeige einfach wieder das Icon an
+                        errorBuilder: (ctx, err, stack) => Icon(node.icon, color: node.color, size: 20),
+                      ),
+                    )
+                  : Icon(node.icon, color: node.color, size: 20),
             ),
             const SizedBox(width: 16),
             Expanded(
