@@ -12,8 +12,8 @@ import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 import '../services/data_link_service.dart';
 
-// Deine Imports (Lasse diese so, wie sie in deinem Projekt sind)
 import '../config/server_config.dart';
+import 'file_viewer_screen.dart';
 import '../ui/theme_constants.dart';
 import '../ui/tech_card.dart';
 import '../ui/parallelogram_button.dart';
@@ -23,7 +23,8 @@ import '../ui/scifi_background.dart';
 // =============================================================================
 // 1. VFS MODEL
 // =============================================================================
-enum VfsNodeType { folder, drive, image, video, audio, code, archive, document, unknown }
+// 🔥 FIX 1: 'pdf' zur Liste der Typen hinzugefügt
+enum VfsNodeType { folder, drive, image, video, audio, code, archive, document, pdf, unknown }
 enum SortOption { name, date, size, type }
 
 class VfsNode {
@@ -37,7 +38,7 @@ class VfsNode {
   final VfsNodeType type;
   bool isSelected = false;
   
-  final String? downloadUrl; // 🔥 NEU: URL für das Thumbnail
+  final String? downloadUrl;
 
   VfsNode({
     required this.name,
@@ -48,19 +49,24 @@ class VfsNode {
     this.size = 0,
     this.modified = 0,
     this.isSelected = false,
-    this.downloadUrl, // 🔥 NEU
+    this.downloadUrl, 
   }) : type = _determineType(name, isDirectory, path);
 
   static VfsNodeType _determineType(String name, bool isDir, String path) {
     if (path == "ROOT") return VfsNodeType.drive;
     if (isDir) return VfsNodeType.folder;
     final ext = p.extension(name).toLowerCase();
+    
     if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext)) return VfsNodeType.image;
     if (['.mp4', '.mkv', '.mov', '.avi', '.webm'].contains(ext)) return VfsNodeType.video;
     if (['.mp3', '.wav', '.flac', '.ogg'].contains(ext)) return VfsNodeType.audio;
     if (['.zip', '.rar', '.7z', '.tar', '.gz'].contains(ext)) return VfsNodeType.archive;
     if (['.dart', '.py', '.js', '.json', '.xml', '.html', '.css'].contains(ext)) return VfsNodeType.code;
-    if (['.pdf', '.doc', '.docx', '.txt', '.md'].contains(ext)) return VfsNodeType.document;
+    
+    // 🔥 FIX 2: PDF hat jetzt seinen eigenen Typ!
+    if (['.pdf'].contains(ext)) return VfsNodeType.pdf;
+    if (['.doc', '.docx', '.txt', '.md'].contains(ext)) return VfsNodeType.document;
+    
     return VfsNodeType.unknown;
   }
 
@@ -74,6 +80,8 @@ class VfsNode {
       case VfsNodeType.code: return const Color(0xFF00FF00);
       case VfsNodeType.archive: return Colors.orange;
       case VfsNodeType.audio: return Colors.blueAccent;
+      // 🔥 FIX 3: Eigene Farbe für PDFs (Rot)
+      case VfsNodeType.pdf: return Colors.redAccent; 
       default: return Colors.grey;
     }
   }
@@ -88,15 +96,12 @@ class VfsNode {
       case VfsNodeType.code: return Icons.code;
       case VfsNodeType.archive: return Icons.inventory_2;
       case VfsNodeType.document: return Icons.description;
+      // 🔥 FIX 4: Eigenes Icon für PDFs
+      case VfsNodeType.pdf: return Icons.picture_as_pdf; 
       default: return Icons.insert_drive_file;
     }
   }
 }
-
-// =============================================================================
-// 2. CONTROLLER
-// =============================================================================
-
 class FileVaultController extends ChangeNotifier {
   bool isLoading = false;
   String? errorMessage;
@@ -104,8 +109,6 @@ class FileVaultController extends ChangeNotifier {
   String currentDeviceId = "";
   String currentDeviceName = "Network";
   VfsNodeType? activeFilter;
-  
-  // Suche
   String searchQuery = "";
   bool isSearching = false;
   bool isDeepSearchActive = false;
@@ -113,15 +116,13 @@ class FileVaultController extends ChangeNotifier {
   String myDeviceName = "";
   List<VfsNode> _clipboardNodes = [];
   bool _isMoveOperation = false;
-  bool showThumbnails = true; // 🔥 NEU: Eco-Mode Schalter
-
-  // 🔥 NEU: Methode zum Umschalten
+  bool showThumbnails = true; 
   void toggleThumbnails() {
     showThumbnails = !showThumbnails;
     notifyListeners();
   }
 
-  SortOption currentSort = SortOption.name; // ✅ Hier gehören sie hin!
+  SortOption currentSort = SortOption.name; 
   bool sortAscending = true;
   
   List<VfsNode> files = [];
@@ -132,7 +133,6 @@ class FileVaultController extends ChangeNotifier {
   List<VfsNode> get displayFiles {
     List<VfsNode> results = files;
 
-    // A. Filter (Suche & Typ)
     if (!isDeepSearchActive && searchQuery.isNotEmpty) {
       results = files.where((node) => 
         node.name.toLowerCase().contains(searchQuery.toLowerCase())
@@ -141,9 +141,6 @@ class FileVaultController extends ChangeNotifier {
     if (activeFilter != null) {
       results = results.where((node) => node.type == activeFilter).toList();
     }
-
-    // B. Sortierung (NEU!)
-    // Wir kopieren die Liste, damit wir nicht die Original-Reihenfolge zerstören
     results = List.from(results);
     
     results.sort((a, b) {
@@ -162,7 +159,6 @@ class FileVaultController extends ChangeNotifier {
           cmp = a.type.index.compareTo(b.type.index);
           break;
       }
-      // Drehrichtung beachten
       return sortAscending ? cmp : -cmp;
     });
 
@@ -177,16 +173,13 @@ class FileVaultController extends ChangeNotifier {
 
   void changeSort(SortOption option) {
     if (currentSort == option) {
-      // Gleiche Option geklickt -> Richtung umkehren
       sortAscending = !sortAscending;
     } else {
-      // Neue Option -> Standardrichtung setzen
       currentSort = option;
-      // Bei Datum und Größe will man meistens "Größte/Neueste zuerst" (also Absteigend)
       if (option == SortOption.date || option == SortOption.size) {
         sortAscending = false; 
       } else {
-        sortAscending = true; // Bei Name A-Z
+        sortAscending = true;
       }
     }
     notifyListeners();
@@ -196,7 +189,7 @@ class FileVaultController extends ChangeNotifier {
     _clipboardNodes = List.from(selectedNodes);
     _isMoveOperation = false;
     clearSelection();
-    notifyListeners(); // UI Update (vielleicht "Paste" Button anzeigen?)
+    notifyListeners(); 
   }
 
   void cutSelection() {
@@ -210,10 +203,6 @@ class FileVaultController extends ChangeNotifier {
 
   Future<void> pasteFiles() async {
     if (_clipboardNodes.isEmpty) return;
-
-    // 1. Wohin soll es gehen? (Ziel)
-    // Wenn wir im Root sind, ist das Ziel leer (Standard-Download-Ordner des Geräts)
-    // Sonst ist es der aktuelle Pfad.
     String destination = (currentPath == "ROOT" || currentPath == "Drives") 
         ? "" 
         : currentPath;
@@ -223,24 +212,15 @@ class FileVaultController extends ChangeNotifier {
 
     int successCount = 0;
     int failCount = 0;
-
-    // Wir erstellen eine Kopie der Liste, damit wir sie während des Iterierens modifizieren können
     final nodesToPaste = List<VfsNode>.from(_clipboardNodes);
 
     for (var node in nodesToPaste) {
       try {
         print("📋 Processing Paste: ${node.name} (${node.deviceId}) -> $currentDeviceId");
-
-        // --- SZENARIO 1: LOKAL (PC zu PC / Handy zu Handy) ---
-        // Quelle == Ich  UND  Ziel == Ich
         if (node.deviceId == myClientId && currentDeviceId == myClientId) {
           await _handleLocalPaste(node, destination);
           successCount++;
         }
-
-        // --- SZENARIO 2: UPLOAD (PUSH) ---
-        // Quelle == Ich  UND  Ziel == Anderes Gerät
-        // Ich schiebe meine Datei auf das andere Gerät
         else if (node.deviceId == myClientId && currentDeviceId != myClientId) {
           print("🚀 PUSHING file to remote: $currentDeviceId");
           
@@ -249,10 +229,8 @@ class FileVaultController extends ChangeNotifier {
              await DataLinkService().sendFolder(
                Directory(node.path), 
                [currentDeviceId],
-               // Callback ist hier schwer, wir feuern und vergessen
              );
           } else {
-             // Datei senden (mit Zielpfad!)
              await DataLinkService().sendFile(
                File(node.path), 
                [currentDeviceId], 
@@ -261,25 +239,15 @@ class FileVaultController extends ChangeNotifier {
           }
           successCount++;
         }
-
-        // --- SZENARIO 3: DOWNLOAD (PULL) ---
-        // Quelle == Anderes Gerät  UND  Ziel == Ich
-        // Ich hole mir eine Datei von woanders her
         else if (node.deviceId != myClientId && currentDeviceId == myClientId) {
            print("⬇️ PULLING file from remote: ${node.deviceId}");
-           
-           // Wir bitten das andere Gerät: "Schick mir das!"
            await _sendCommandToRelay("request_transfer", {
              "path": node.path,
              "requester_id": myClientId,
-             "destination_path": destination // Wohin soll es bei mir?
+             "destination_path": destination 
            });
            successCount++;
         }
-
-        // --- SZENARIO 4: REMOTE ZU REMOTE ---
-        // PC A -> PC B (gesteuert vom Handy)
-        // Das ist sehr komplex (Server müsste Proxy spielen). Blockieren wir erstmal.
         else {
            print("⚠️ Remote-to-Remote copy not supported yet.");
            failCount++;
@@ -291,15 +259,10 @@ class FileVaultController extends ChangeNotifier {
       }
     }
 
-    // Aufräumen
     if (_isMoveOperation) {
-      // Bei "Ausschneiden" leeren wir das Clipboard
       _clipboardNodes.clear();
     } else {
-      // Bei "Kopieren" behalten wir es (User könnte es nochmal woanders einfügen wollen)
     }
-
-    // Feedback
     if (failCount > 0) {
       errorMessage = "Success: $successCount, Failed: $failCount";
     } else {
@@ -308,8 +271,6 @@ class FileVaultController extends ChangeNotifier {
     }
 
     _setLoading(false);
-    
-    // Ansicht aktualisieren (kurz warten, damit Server reagieren kann)
     await Future.delayed(const Duration(seconds: 1));
     _loadRemotePath(currentDeviceId, currentPath);
   }
@@ -320,7 +281,6 @@ class FileVaultController extends ChangeNotifier {
     final fileName = p.basename(node.path);
     String destPath = p.join(destination.isEmpty ? Directory.current.path : destination, fileName);
 
-    // Namenskollision verhindern (file.txt -> file_copy.txt)
     if (await File(destPath).exists() || await Directory(destPath).exists()) {
        final name = p.basenameWithoutExtension(fileName);
        final ext = p.extension(fileName);
@@ -333,8 +293,6 @@ class FileVaultController extends ChangeNotifier {
     } else {
        if (await sourceFile.exists()) await sourceFile.copy(destPath);
        else if (await sourceDir.exists()) {
-         // Ordner lokal kopieren ist in Dart nervig, wir überspringen das für V1
-         // oder nutzen einen rekursiven Helper. Für jetzt:
          print("Local folder copy not fully implemented, use Move instead.");
        }
     }
@@ -346,8 +304,6 @@ class FileVaultController extends ChangeNotifier {
 
     int count = 0;
     for (var node in selectedNodes) {
-      // WICHTIG: "if (node.isDirectory) continue;" ENTFERNEN wir jetzt!
-      // Der DataLinkService kann jetzt Ordner zippen!
       
       try {
         if (node.deviceId == myClientId) {
@@ -376,44 +332,34 @@ class FileVaultController extends ChangeNotifier {
     _setLoading(false);
     
     if (count > 0) {
-      // Kleiner Hack: Wir zeigen kurz eine Meldung via ErrorMessage (oder Snackbar im View)
       errorMessage = "REQUESTED $count DOWNLOADS via DATALINK";
       Future.delayed(const Duration(seconds: 2), () => errorMessage = null);
     }
   }
-
-  // ✅ 2. UPLOAD (PUT)
   Future<void> uploadFile() async {
-    // Check: Wohin soll es gehen?
     if (currentDeviceId.isEmpty || currentDeviceId == myClientId) {
       errorMessage = "SELECT A REMOTE FOLDER FIRST";
       return;
     }
 
     try {
-      // Datei auswählen
       FilePickerResult? result = await FilePicker.platform.pickFiles(allowMultiple: true);
 
       if (result != null) {
         _setLoading(true);
         List<File> files = result.paths.map((path) => File(path!)).toList();
-        
-        // Zielpfad bestimmen (wo wir gerade im Vault sind)
         String destination = (currentPath == "ROOT" || currentPath == "Drives") 
-            ? "" // Root ist ungültig, DataLink nimmt dann Default Download Folder
+            ? "" 
             : currentPath;
 
         print("🚀 Uploading ${files.length} files to $currentDeviceId at $destination");
-
-        // Via DataLink senden (mit Zielpfad!)
         await DataLinkService().sendFiles(
           files, 
           [currentDeviceId], 
-          destinationPath: destination // Das haben wir im DataLinkService schon vorbereitet!
+          destinationPath: destination 
         );
         
         _setLoading(false);
-        // Refresh, damit wir die neuen Dateien sehen (nach kurzer Zeit)
         Future.delayed(const Duration(seconds: 2), () => _loadRemotePath(currentDeviceId, currentPath));
       }
     } catch (e) {
@@ -421,13 +367,11 @@ class FileVaultController extends ChangeNotifier {
       errorMessage = "Upload Failed: $e";
     }
   }
-
-  // NEU: Filter setzen oder löschen (Toggle)
   void setFilter(VfsNodeType type) {
     if (activeFilter == type) {
-      activeFilter = null; // Filter deaktivieren, wenn man nochmal draufklickt
+      activeFilter = null; 
     } else {
-      activeFilter = type; // Filter aktivieren
+      activeFilter = type; 
     }
     notifyListeners();
   }
@@ -503,16 +447,10 @@ class FileVaultController extends ChangeNotifier {
 
     try {
       String searchUrl;
-
-      // FALL A: GLOBALE SUCHE (Wir sind im Root / "Drives")
-      // Wir fragen den Raspberry Pi (Zentrale), da er alle Indizes kennt.
       if (currentDeviceId.isEmpty || currentPath == "ROOT" || currentPath == "Drives") {
          print("🌍 GLOBAL SEARCH via $_serverUrl");
-         // Wir nutzen _serverUrl (die Adresse vom Pi aus der Config)
          searchUrl = '$_serverUrl/files/search?query=${Uri.encodeComponent(query)}';
       } 
-      // FALL B: LOKALE SUCHE (Wir sind in einem Ordner auf einem Gerät)
-      // Wir fragen das Gerät direkt für maximale Geschwindigkeit.
       else {
         final devResponse = await http.get(Uri.parse('$_serverUrl/storage/devices'));
         final devData = json.decode(devResponse.body);
@@ -524,8 +462,6 @@ class FileVaultController extends ChangeNotifier {
         
         final ip = device['ip'];
         final port = device['file_server_port'];
-        
-        // Suchpfad einschränken (optional, falls das Gerät das unterstützt)
         String searchRoot = currentPath;
         
         searchUrl = 'http://$ip:$port/files/search?query=${Uri.encodeComponent(query)}&path=${Uri.encodeComponent(searchRoot)}';
@@ -540,15 +476,12 @@ class FileVaultController extends ChangeNotifier {
           final rawFiles = List<dynamic>.from(data['files']);
           
           files = rawFiles.map((f) {
-            // WICHTIG: Bei globaler Suche sagt der Server uns, wo die Datei liegt
-            // Wenn device_id fehlt (lokale Suche), nehmen wir das aktuelle Gerät.
             final sourceDevice = f['device_id'] ?? currentDeviceId;
             
             return VfsNode(
               name: f['name'],
               path: f['path'],
               deviceId: sourceDevice, 
-              // Schöner Name für die Anzeige ("Remote" oder echter Name)
               deviceName: sourceDevice == currentDeviceId ? currentDeviceName : (sourceDevice == "SERVER" ? "QualityLink Core" : sourceDevice),
               isDirectory: f['is_directory'],
               size: f['size'] ?? 0,
@@ -570,18 +503,14 @@ class FileVaultController extends ChangeNotifier {
     isSearching = !isSearching;
     if (!isSearching) {
       searchQuery = "";
-      activeFilter = null; // Filter resetten
+      activeFilter = null; 
       isDeepSearchActive = false;
       
       if (currentPath == "ROOT") {
-          // Wir sind ganz oben bei der Geräte-Auswahl
           loadRoot();
       } else if (currentPath == "Drives") {
-          // FIX: Wenn wir im Start-Ordner eines Geräts sind, laden wir die Pfade neu!
-          // Wir übergeben 'null', damit _loadRemotePath den Endpunkt /files/paths aufruft.
           _loadRemotePath(currentDeviceId, null); 
       } else {
-          // Wir sind in einem Unterordner -> Ordner neu laden
           _loadRemotePath(currentDeviceId, currentPath);
       }
     }
@@ -592,8 +521,8 @@ class FileVaultController extends ChangeNotifier {
     if (currentDeviceId.isEmpty) return;
     
     final bodyData = json.encode({
-      "sender_id": "MASTER_CONTROL", // Oder deine ClientID
-      "target_id": currentDeviceId,  // Das Zielgerät (PC/Handy)
+      "sender_id": "MASTER_CONTROL", 
+      "target_id": currentDeviceId,  
       "action": action,
       "params": params
     });
@@ -611,11 +540,11 @@ class FileVaultController extends ChangeNotifier {
     }
   }
 
-
-  // 2. Löschen - jetzt über Relay
   Future<void> deleteNodes() async {
     if (selectedNodes.isEmpty) return;
     _setLoading(true);
+
+    final pathAtDeletion = currentPath;
     
     for (var node in selectedNodes) {
       try {
@@ -629,8 +558,14 @@ class FileVaultController extends ChangeNotifier {
     }
 
     clearSelection();
-    await Future.delayed(const Duration(seconds: 1));
-    // Wenn wir im Root waren, Root neu laden, sonst Ordner
+
+    await Future.delayed(const Duration(milliseconds: 600)); 
+
+    if (currentPath != pathAtDeletion) {
+       _setLoading(false);
+       return;
+    }
+    
     if (currentPath == "ROOT" || currentPath == "Drives") {
         loadRoot();
     } else {
@@ -638,16 +573,22 @@ class FileVaultController extends ChangeNotifier {
     }
   }
 
-  // 3. Umbenennen - jetzt über Relay
   Future<void> renameNode(VfsNode node, String newName) async {
     _setLoading(true);
+    final pathAtRename = currentPath; 
+    
     try {
       await _sendCommandToRelay("rename", {
         "path": node.path,
         "new_name": newName
       });
       await Future.delayed(const Duration(milliseconds: 500));
-      _loadRemotePath(currentDeviceId, currentPath);
+      
+      if (currentPath == pathAtRename) {
+         _loadRemotePath(currentDeviceId, currentPath);
+      } else {
+         _setLoading(false);
+      }
     } catch (e) {
       errorMessage = "Rename failed: $e";
       _setLoading(false);
@@ -655,14 +596,12 @@ class FileVaultController extends ChangeNotifier {
   }
 
   Future<void> _loadRemotePath(String deviceId, String? path) async {
-    // Reset Suche beim Navigieren
     searchQuery = "";
     isSearching = false;
     
     _setLoading(true);
     errorMessage = null;
     try {
-      // 1. Geräte-IP holen
       final devResponse = await http.get(Uri.parse('$_serverUrl/storage/devices'));
       final devData = json.decode(devResponse.body);
       final device = (devData['devices'] as List).firstWhere(
@@ -675,17 +614,13 @@ class FileVaultController extends ChangeNotifier {
         
         String url;
         
-        // --- DER FIX IST HIER ---
-        // Wenn path "Drives" ist, wollen wir in den else-Block rutschen (Dateiliste laden)!
-        if (path == null || path == "ROOT") {
+        if (path == null || path == "ROOT" || path == "Drives") {
            url = 'http://$ip:$port/files/paths';
            currentPath = "Drives";
         } else {
-           // Ruft /files/list auf -> Der Server gibt uns endlich die Dateien!
            url = 'http://$ip:$port/files/list?path=${Uri.encodeComponent(path)}';
            currentPath = path;
         }
-        // ------------------------
 
         print("📡 Calling Remote: $url");
         
@@ -693,8 +628,6 @@ class FileVaultController extends ChangeNotifier {
         
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
-          
-          // Fall A: Wir sind ganz oben (Pfade anzeigen)
           if (currentPath == "Drives" && data.containsKey('paths')) {
             final paths = List<String>.from(data['paths']);
             files = paths.map((p) => VfsNode(
@@ -705,7 +638,6 @@ class FileVaultController extends ChangeNotifier {
               isDirectory: true,
             )).toList();
           } 
-          // Fall B: Wir zeigen echte Dateien an
           else {
             final rawFiles = List<dynamic>.from(data['files']);
             files = rawFiles.map((f) => VfsNode(
@@ -716,7 +648,6 @@ class FileVaultController extends ChangeNotifier {
               isDirectory: f['is_directory'],
               size: f['size'] ?? 0,
               modified: f['modified'] ?? 0,
-              // 🔥 NEU: Wir bauen die direkte Download-URL für das Bild zusammen!
               downloadUrl: 'http://$ip:$port/files/download?path=${Uri.encodeComponent(f['path'])}',
             )).toList();
           }
@@ -778,10 +709,6 @@ class FileVaultController extends ChangeNotifier {
   }
 }
 
-// =============================================================================
-// 3. UI VIEW
-// =============================================================================
-
 class NetworkStorageScreen extends StatelessWidget {
   final String myClientId;
   final String myDeviceName;
@@ -823,7 +750,7 @@ class _FileVaultView extends StatelessWidget {
       },
       child: Scaffold(
         backgroundColor: Colors.transparent, 
-        body: SafeArea( // ✅ WICHTIG für Mobile Layout
+        body: SafeArea( 
           child: Stack(
             children: [
               Column(
@@ -868,7 +795,6 @@ class _FileVaultView extends StatelessWidget {
                 ],
               ),
               
-              // Action Bar (unten, einfahrbar)
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 300),
                 curve: Curves.easeOutExpo,
@@ -883,11 +809,7 @@ class _FileVaultView extends StatelessWidget {
       ),
     );
   }
-
-  // --- HEADER BEREICH (Toolbar & Suche) ---
-
   Widget _buildHeader(BuildContext context, FileVaultController controller) {
-    // Wenn Suche aktiv ist, zeigen wir die SearchBar
     if (controller.isSearching) {
       return _buildSearchBar(context, controller);
     }
@@ -926,15 +848,12 @@ class _FileVaultView extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          
-          // 1. 🔥 HIER WIRD DIE ALTE TITEL-ZEILE DURCH DIE NEUE STICKY TOPBAR ERSETZT
           GlobalTopbar(
             title: "FILEVAULT",
             statusColor: controller.errorMessage == null ? AppColors.primary : AppColors.warning,
             subtitle1: "NETWORK STORAGE",
             subtitle2: "TAP GEAR FOR ECO MODE",
             onSettingsTap: () {
-              // Eco-Mode Menü öffnen
               showModalBottomSheet(
                 context: context,
                 backgroundColor: AppColors.card,
@@ -963,8 +882,6 @@ class _FileVaultView extends StatelessWidget {
               );
             },
           ),
-
-          // 2. TOOLBAR (Breadcrumbs & Actions)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10),
             child: Column(
@@ -978,8 +895,6 @@ class _FileVaultView extends StatelessWidget {
                         child: Row(children: breadcrumbs),
                       ),
                     ),
-                    
-                    // Action Buttons
                     IconButton(
                       icon: const Icon(Icons.upload_file, color: AppColors.primary),
                       onPressed: () => controller.uploadFile(),
@@ -993,15 +908,11 @@ class _FileVaultView extends StatelessWidget {
                       icon: const Icon(Icons.search, color: AppColors.primary),
                       onPressed: () => controller.toggleSearch(),
                     ),
-
-                    // WICHTIG: Platzhalter für App Icon (60px)
                     const SizedBox(width: 60),
                   ],
                 ),
                 
                 const SizedBox(height: 10),
-                
-                // Info Zeile (Anzahl Dateien / Selektion)
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -1025,7 +936,6 @@ class _FileVaultView extends StatelessWidget {
   }
 
   Widget _buildSearchBar(BuildContext context, FileVaultController controller) {
-    // Filter Icons Liste
     final filters = [
       {'type': VfsNodeType.image, 'label': 'IMG', 'icon': Icons.image},
       {'type': VfsNodeType.video, 'label': 'MOV', 'icon': Icons.movie},
@@ -1036,7 +946,6 @@ class _FileVaultView extends StatelessWidget {
     ];
 
     return Container(
-      // Padding oben angepasst für SafeArea
       padding: const EdgeInsets.only(top: 10, bottom: 10, left: 16, right: 16),
       color: AppColors.card.withValues(alpha: 0.9),
       child: Column(
@@ -1083,16 +992,12 @@ class _FileVaultView extends StatelessWidget {
                   icon: const Icon(Icons.close, color: AppColors.warning),
                   onPressed: () => controller.toggleSearch(),
                 ),
-
-                // ✅ WICHTIG: Auch hier Platzhalter für App Icon (60px)
                 const SizedBox(width: 60),
               ],
             ),
           ),
           
           const SizedBox(height: 10),
-          
-          // Filter Leiste
           SizedBox(
             height: 32,
             child: ListView.separated(
@@ -1154,9 +1059,6 @@ class _FileVaultView extends StatelessWidget {
       ),
     );
   }
-
-  // --- LISTEN ELEMENTE & POPUPS ---
-
   Widget _buildFileItem(BuildContext context, FileVaultController controller, VfsNode node) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -1174,7 +1076,11 @@ class _FileVaultView extends StatelessWidget {
             if (node.isDirectory) {
               controller.open(node);
             } else {
-              print("Open File: ${node.name}");
+              // 🔥 FIX: Öffnet nun den brandneuen Viewer!
+              Navigator.push(
+                context, 
+                MaterialPageRoute(builder: (_) => FileViewerScreen(node: node))
+              );
             }
           }
         },
@@ -1189,15 +1095,13 @@ class _FileVaultView extends StatelessWidget {
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(color: node.color.withValues(alpha: 0.3)),
               ),
-              // 🔥 FIX: Hier kommt das Thumbnail hin (oder das Icon, falls Eco-Mode aktiv ist)
               child: (node.type == VfsNodeType.image && node.downloadUrl != null && controller.showThumbnails)
                   ? ClipRRect(
                       borderRadius: BorderRadius.circular(3),
                       child: Image.network(
                         node.downloadUrl!,
                         fit: BoxFit.cover,
-                        cacheWidth: 120, // 💡 EXTREM WICHTIG: Spart RAM beim Rendern!
-                        // Wenn der Download fehlschlägt, zeige einfach wieder das Icon an
+                        cacheWidth: 120, 
                         errorBuilder: (ctx, err, stack) => Icon(node.icon, color: node.color, size: 20),
                       ),
                     )
@@ -1247,7 +1151,6 @@ class _FileVaultView extends StatelessWidget {
   }
 
   Widget _buildActionBar(BuildContext context, FileVaultController controller) {
-    // Paste Mode (Clipboard nicht leer)
     if (controller.canPaste && !controller.isSelectionMode) {
        return TechCard(
         borderColor: AppColors.accent,
