@@ -233,9 +233,6 @@ class DataLinkService {
         _handleRemoteCommand(data);
       }
       
-      // Fall C: RELAY UPDATE (Das hat gefehlt!)
-      // Der Server sagt: "Datei liegt jetzt auf der Festplatte bereit!"
-      // Fall C: RELAY UPDATE
       else if (event == 'transfer_update') {
           final transferData = data['transfer'];
           
@@ -266,13 +263,15 @@ class DataLinkService {
             _handleRelayReadyTransfer(transfer, _downloadPath);
           }
       }
+      else if (event == 'clear_history') {
+          print("🧹 Server requested global history wipe!");
+          clearTransferHistory();
+      }
     } catch (e) {
       print("⚠️ WS Message Parse Error: $e");
     }
   }
-  // ✅ NEUE METHODE: Führt Befehle vom Server aus
-  // In lib/services/data_link_service.dart
-
+  
   Future<void> _handleRemoteCommand(Map<String, dynamic> data) async {
     final action = data['action'];
     final params = data['params'];
