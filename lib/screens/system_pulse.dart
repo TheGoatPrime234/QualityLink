@@ -7,6 +7,8 @@ import 'package:http/http.dart' as http;
 import '../config/server_config.dart';
 import '../services/heartbeat_service.dart';
 import '../services/data_link_service.dart';
+import '../ui/global_topbar.dart';
+import '../ui/theme_constants.dart';
 
 // =============================================================================
 // SYSTEM MONITOR SCREEN - MODULE 2 (Enhanced with HeartbeatService Debug Info)
@@ -899,116 +901,106 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
         : _logLines.where((l) => _shouldShowInNormalMode(l)).toList();
 
     return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        title: Text(_devMode ? "SYS // KERNEL_LOG" : "SYSTEM ACTIVITY"),
-        backgroundColor: Colors.black,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.favorite, color: Color(0xFFFF0055)),
-            onPressed: _showHeartbeatDebug,
-            tooltip: "Heartbeat Debug",
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: const Icon(Icons.admin_panel_settings, color: Color(0xFFFF0055)),
-            onPressed: _showAdminPanel,
-            tooltip: "Admin Panel",
-          ),
-          const SizedBox(width: 8),
-          TextButton.icon(
-            onPressed: () => setState(() => _devMode = !_devMode),
-            icon: Icon(
-              _devMode ? Icons.terminal : Icons.remove_red_eye,
-              color: _devMode ? const Color(0xFF00FF41) : Colors.white,
-              size: 18,
+      backgroundColor: AppColors.background,
+      // 🔥 FIX: AppBar ist komplett weg, wir nutzen SafeArea + Column!
+      body: SafeArea(
+        child: Column(
+          children: [
+            // 1. STICKY TOPBAR MIT DROPDOWN
+            GlobalTopbar(
+              title: "SYSTEMPULSE",
+              statusColor: _heartbeatDebugInfo['isConnected'] == true ? AppColors.primary : AppColors.warning,
+              subtitle1: "CORE SYSTEM LOGS",
+              subtitle2: "TAP TITLE FOR ADMIN ACTIONS",
+              // Hier sind die Menü-Punkte im Dropdown versteckt:
+              menuItems: [
+                const PopupMenuItem(value: 'debug', child: Text("Heartbeat Debug")),
+                const PopupMenuItem(value: 'admin', child: Text("Admin Panel")),
+                PopupMenuItem(value: 'dev', child: Text(_devMode ? "Disable Dev Mode" : "Enable Dev Mode")),
+                PopupMenuItem(value: 'scroll', child: Text(_autoScroll ? "Pause Auto-scroll" : "Enable Auto-scroll")),
+              ],
+              onMenuItemSelected: (value) {
+                if (value == 'debug') _showHeartbeatDebug();
+                if (value == 'admin') _showAdminPanel();
+                if (value == 'dev') setState(() => _devMode = !_devMode);
+                if (value == 'scroll') setState(() => _autoScroll = !_autoScroll);
+              },
             ),
-            label: Text(
-              _devMode ? "DEV MODE" : "NORMAL",
-              style: TextStyle(
-                color: _devMode ? const Color(0xFF00FF41) : Colors.white,
-                fontWeight: FontWeight.bold,
+            
+            // 2. SCROLLBARER INHALT (Log-Liste)
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border(
+                    top: BorderSide(
+                      color: (_devMode ? AppColors.primary : Colors.white).withValues(alpha: 0.3),
+                    ),
+                  ),
+                  color: AppColors.surface,
+                ),
+                child: displayList.isEmpty 
+                  ? const Center(child: Text("No relevant logs found.", style: TextStyle(color: Colors.grey))) 
+                  : ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(8),
+                      itemCount: displayList.length,
+                      itemBuilder: (context, index) {
+                        final rawLine = displayList[index];
+                        
+                        // DEV MODE STYLING
+                        if (_devMode) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Text(
+                              rawLine,
+                              style: GoogleFonts.shareTechMono(
+                                color: _getLogColor(rawLine),
+                                fontSize: 11,
+                              ),
+                            ),
+                          );
+                        } 
+                        // NORMAL MODE STYLING
+                        else {
+                          final cleanText = _formatForNormalMode(rawLine);
+                          final color = _getLogColor(rawLine);
+                          final icon = _getIconForLine(rawLine);
+                          
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF111111),
+                              border: Border(left: BorderSide(color: color, width: 3)),
+                              borderRadius: const BorderRadius.only(
+                                topRight: Radius.circular(4),
+                                bottomRight: Radius.circular(4)
+                              ),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Icon(icon, size: 16, color: color.withValues(alpha: 0.8)),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    cleanText,
+                                    style: GoogleFonts.rajdhani(
+                                      color: Colors.white.withValues(alpha: 0.9),
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+                      },
+                    ),
               ),
             ),
-            style: TextButton.styleFrom(
-              backgroundColor: _devMode ? const Color(0xFF00FF41).withValues(alpha: 0.1) : Colors.grey.withValues(alpha: 0.2),
-            ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: Icon(
-              _autoScroll ? Icons.arrow_circle_down : Icons.pause_circle_outline,
-              color: _autoScroll ? const Color(0xFF00FF41) : Colors.grey,
-            ),
-            onPressed: () => setState(() => _autoScroll = !_autoScroll),
-            tooltip: "Auto-scroll",
-          )
-        ],
-      ),
-      body: Container(
-        decoration: BoxDecoration(
-          border: Border(
-              top: BorderSide(
-                  color: (_devMode ? const Color(0xFF00FF41) : Colors.white).withValues(alpha: 0.3))),
-          color: const Color(0xFF050505),
-        ),
-        child: displayList.isEmpty 
-          ? const Center(child: Text("No relevant logs found.", style: TextStyle(color: Colors.grey))) 
-          : ListView.builder(
-          controller: _scrollController,
-          padding: const EdgeInsets.all(8),
-          itemCount: displayList.length,
-          itemBuilder: (context, index) {
-            final rawLine = displayList[index];
-            
-            if (_devMode) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Text(
-                  rawLine,
-                  style: GoogleFonts.shareTechMono(
-                    color: _getLogColor(rawLine),
-                    fontSize: 11,
-                  ),
-                ),
-              );
-            } else {
-              final cleanText = _formatForNormalMode(rawLine);
-              final color = _getLogColor(rawLine);
-              final icon = _getIconForLine(rawLine);
-              
-              return Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF111111),
-                  border: Border(left: BorderSide(color: color, width: 3)),
-                  borderRadius: const BorderRadius.only(
-                    topRight: Radius.circular(4),
-                    bottomRight: Radius.circular(4)
-                  ),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(icon, size: 16, color: color.withValues(alpha: 0.8)),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        cleanText,
-                        style: GoogleFonts.rajdhani(
-                          color: Colors.white.withValues(alpha: 0.9),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }
-          },
+          ],
         ),
       ),
     );

@@ -17,6 +17,7 @@ import '../widgets/futuristic_progress_bar.dart';
 
 import '../ui/theme_constants.dart';
 import '../ui/tech_card.dart';
+import '../ui/global_topbar.dart';
 import '../ui/parallelogram_button.dart';
 
 // =============================================================================
@@ -440,22 +441,21 @@ Future<void> _pickAndSendFiles() async {
     final otherPeers = _peers.where((p) => !p.isSameLan).toList();
 
     return Scaffold(
-      backgroundColor: AppColors.background, // ✅ Deep Black
+      backgroundColor: AppColors.background, 
       body: SafeArea(
-        child: Column(
+        child: Column( // <--- Column hält Topbar und den Rest
           children: [
-            if (_isProcessing)
-              FuturisticProgressBar(
-                progress: _progressValue,
-                subtitle: _progressMessage,
-                mode: _progressMode,
-                label: "Processing", 
-                onCancel: () {
-                  if (_currentTransferId != null) {
-                    _datalink.cancelTransfer(_currentTransferId!);
-                  }
-                },
-              ),
+            // 1. STICKY TOPBAR
+            GlobalTopbar(
+              title: "DATALINK",
+              statusColor: _isConnected ? AppColors.primary : AppColors.warning,
+              subtitle1: "ID: ${widget.clientId}",
+              subtitle2: "P2P IP: ${_datalink.myLocalIp}:${_datalink.localServerPort}",
+              onSettingsTap: () {
+                // Hier kommt später dein Einstellungs-Menü hin
+                print("Settings tapped");
+              },
+            ),
             
             Expanded(
               child: SingleChildScrollView(
@@ -463,7 +463,6 @@ Future<void> _pickAndSendFiles() async {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildHeader(),
                     const SizedBox(height: 20),
                     _buildPathSelector(),
                     const Divider(color: Colors.white10), // Subtiler
@@ -498,40 +497,6 @@ Future<void> _pickAndSendFiles() async {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildHeader() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      color: AppColors.surface, // ✅ Surface Farbe
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Text("DATALINK", style: TextStyle(color: AppColors.primary, fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(width: 12),
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  // Status: Cyan (Online) oder Warning (Offline)
-                  color: _isConnected ? AppColors.primary : AppColors.warning,
-                  shape: BoxShape.circle,
-                  boxShadow: _isConnected 
-                      ? [BoxShadow(color: AppColors.primary.withValues(alpha: 0.5), blurRadius: 8, spreadRadius: 2)] 
-                      : null,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text("ID: ${widget.clientId}", style: const TextStyle(color: AppColors.textDim, fontSize: 10)),
-          Text("P2P IP: ${_datalink.myLocalIp}:${_datalink.localServerPort}", style: const TextStyle(color: AppColors.textDim, fontSize: 10)),
-        ],
       ),
     );
   }

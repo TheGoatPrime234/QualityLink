@@ -114,19 +114,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
 
           // 2. Der Inhalt + Das Icon oben rechts
           Expanded(
-            child: Stack(
-              children: [
-                // A) Der eigentliche Screen-Inhalt
-                _screens[_currentIndex],
-
-                // B) Das Icon oben rechts (wie in der Skizze)
-                Positioned(
-                  top: 16,
-                  right: 16,
-                  child: _buildTopRightIcon(),
-                ),
-              ],
-            ),
+         child: _screens[_currentIndex],
           ),
         ],
       ),
@@ -139,22 +127,9 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   Widget _buildMobileLayout() {
     return Scaffold(
       backgroundColor: Colors.transparent,
-      // 1. Der Inhalt + Icon (gestapelt)
-      body: Stack(
-        children: [
-          // A) Inhalt
-          // SafeArea, damit wir nicht hinter die Notch rutschen
-          SafeArea(
-            child: _screens[_currentIndex],
-          ),
-
-          // B) Icon oben rechts
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 10, // Top Padding beachten
-            right: 16,
-            child: _buildTopRightIcon(),
-          ),
-        ],
+      // 🔥 FIX: Stack und Positioned sind weg! Einfach nur noch die SafeArea.
+      body: SafeArea(
+        child: _screens[_currentIndex],
       ),
 
       // 2. Die "Toolbar" (Unten)
@@ -166,7 +141,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           backgroundColor: AppColors.card.withValues(alpha: 0.9),
           currentIndex: _currentIndex,
           onTap: (index) => setState(() => _currentIndex = index),
-          type: BottomNavigationBarType.fixed, // Wichtig für > 3 Items
+          type: BottomNavigationBarType.fixed,
           selectedItemColor: AppColors.primary,
           unselectedItemColor: Colors.grey,
           showUnselectedLabels: false,
@@ -177,23 +152,6 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
             BottomNavigationBarItem(icon: Icon(Icons.terminal), label: "SYS"),
           ],
         ),
-      ),
-    );
-  }
-
-  // Das Icon oben rechts (Settings, Profil, Status?)
-  Widget _buildTopRightIcon() {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.5),
-        border: Border.all(color: AppColors.accent.withValues(alpha: 0.5)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: const Icon(
-        Icons.settings, // Oder was du da haben willst
-        color: AppColors.accent,
-        size: 24,
       ),
     );
   }
