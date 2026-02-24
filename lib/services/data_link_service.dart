@@ -155,13 +155,20 @@ class DataLinkService {
 
   void pause() {
     if (!_isRunning) return;
+    print("🔋 DataLink Sync throttled to 30s (Background Mode)");
     _syncTimer?.cancel();
-    // WebSocket lassen wir offen, oder schließen ihn um Akku zu sparen (hier lassen wir ihn offen)
+    _syncTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      _sendHeartbeat(); 
+      _syncTransfers();
+      _monitorSenderTasks();
+    });
+    // WebSocket bleibt offen für Echtzeit-Pushes!
   }
 
   void resume() {
     if (!_isRunning) return;
-    _startSyncLoop();
+    print("⚡ DataLink Sync accelerated to 5s (Foreground Mode)");
+    _startSyncLoop(); // Startet den 5-Sekunden-Loop wieder
     if (!_isWsConnected) _connectWebSocket();
   }
 

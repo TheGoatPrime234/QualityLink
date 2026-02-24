@@ -42,7 +42,7 @@ class ClipboardBackgroundService {
         playSound: false,
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(3000),
+        eventAction: ForegroundTaskEventAction.repeat(15000), 
         autoRunOnBoot: false,
         allowWakeLock: true,
         allowWifiLock: false,

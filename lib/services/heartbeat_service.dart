@@ -72,19 +72,30 @@ class HeartbeatService {
     await _sendDisconnectHeartbeat();
   }
 
+  // 🔥 NEU: Verschiedene Intervalle für Vorder- und Hintergrund
+  final Duration _foregroundInterval = const Duration(seconds: 3);
+  final Duration _backgroundInterval = const Duration(seconds: 30);
+
   void pause() {
     if (!_isRunning) return;
+    print("🔋 Heartbeat throttled to 30s (Background Mode)");
+    heartbeatInterval = _backgroundInterval;
     _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(heartbeatInterval, (timer) {
+      _sendHeartbeat();
+    });
   }
 
   void resume() {
     if (!_isRunning) return;
+    print("⚡ Heartbeat accelerated to 3s (Foreground Mode)");
+    heartbeatInterval = _foregroundInterval;
     _heartbeatTimer?.cancel();
-    // Sofort senden beim Aufwachen
-    _lastStorageRegistration = null; 
     _heartbeatTimer = Timer.periodic(heartbeatInterval, (timer) {
       _sendHeartbeat();
     });
+    // Sofort feuern beim Aufwachen!
+    _lastStorageRegistration = null; 
     _sendHeartbeat();
   }
 

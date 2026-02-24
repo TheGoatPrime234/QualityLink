@@ -211,10 +211,17 @@ class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingOb
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
+    // Wenn die App in den Hintergrund geht, minimiert oder der Bildschirm aus ist
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.hidden) {
+      print("📱 App minimiert -> Aktiviere Daten-Spar-Modus");
       _heartbeatService.pause();
-    } else if (state == AppLifecycleState.resumed) {
+      DataLinkService().pause();
+    } 
+    // Wenn die App wieder in den Fokus rückt
+    else if (state == AppLifecycleState.resumed) {
+      print("📱 App im Fokus -> Volle Geschwindigkeit");
       _heartbeatService.resume();
+      DataLinkService().resume();
     }
   }
 
