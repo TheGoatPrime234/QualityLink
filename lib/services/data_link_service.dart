@@ -112,21 +112,25 @@ class DataLinkService {
 
   Future<void> _sendHeartbeat() async {
     try {
-      // Wir sagen dem Server: "Hier bin ich, das ist meine IP, das ist mein Port"
-      await _httpClient.post(
+      // 🔥 FIX: Wir nutzen hier absichtlich NICHT den _httpClient!
+      // Der globale _httpClient bleibt als Dauerleitung (Keep-Alive) für Dateien offen.
+      // Der Heartbeat nutzt einen einmaligen Standard-http-Aufruf, der sofort wieder schließt.
+      await http.post(
         Uri.parse('$serverBaseUrl/heartbeat'),
-        headers: {"Content-Type": "application/json"},
+        headers: {
+          "Content-Type": "application/json",
+          "Connection": "close", // Schließt nur DIESE kleine Verbindung, nicht den _httpClient-Tunnel!
+        },
         body: json.encode({
           "client_id": _clientId,
-          "client_name": Platform.localHostname, // Oder dein App-Name
+          "client_name": Platform.localHostname, 
           "device_type": Platform.isAndroid || Platform.isIOS ? "mobile" : "desktop",
           "local_ip": _myLocalIp,
-          "file_server_port": _localServer?.port ?? 0, // 0 falls Server noch startet
+          "file_server_port": _localServer?.port ?? 0, 
         }),
-      ).timeout(const Duration(seconds: 2)); // Kurzer Timeout, darf App nicht blockieren!
+      ).timeout(const Duration(seconds: 2)); 
     } catch (e) {
-      // Leise scheitern, wir versuchen es im Loop gleich wieder
-      print("💓 Heartbeat skipped: $e");
+      // Leise scheitern
     }
   }
 
