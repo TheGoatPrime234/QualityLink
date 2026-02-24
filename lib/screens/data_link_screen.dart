@@ -55,6 +55,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
   String? _systemDownloadPath;
   List<String> _customPaths = [];
   bool _serviceStarted = false;
+  String? _currentTransferId;
 
   @override
   void initState() {
@@ -130,6 +131,7 @@ Future<void> _initializeServices() async {
   }
 
   void _setupDataLinkListeners() {
+    // 1. TRANSFER LISTENER (Aktualisiert die Liste der Transfers)
     _datalink.addTransferListener((transfer) {
       if (mounted) {
         setState(() {
@@ -143,9 +145,11 @@ Future<void> _initializeServices() async {
       }
     });
 
+    // 2. PROGRESS LISTENER (Aktualisiert Ladebalken & Overlay)
     _datalink.addProgressListener((id, progress, message) {
       if (mounted) {
         setState(() {
+          _currentTransferId = id; // 🔥 HIER wird die ID für den Cancel-Button gespeichert
           _progressValue = progress;
           _progressMessage = message ?? "";
           
@@ -168,6 +172,7 @@ Future<void> _initializeServices() async {
       }
     });
 
+    // 3. MESSAGE LISTENER (Für Popups unten am Bildschirmrand)
     _datalink.addMessageListener((message, isError) {
       _showSnack(message, isError: isError);
       if (isError && Platform.isAndroid) {
@@ -183,11 +188,11 @@ Future<void> _initializeServices() async {
       }
     });
 
+    // 4. HISTORY CLEARED LISTENER (Wenn der Server den Log löscht)
     _datalink.addHistoryClearedListener(() {
       if (mounted) {
         setState(() {
           _transfers.clear();
-          // Optional: Auch laufende Progress Bars resetten
           _progressValue = 0.0;
           _progressMessage = "";
           _isProcessing = false;
@@ -196,6 +201,7 @@ Future<void> _initializeServices() async {
       }
     });
 
+    // 5. PROCESSING LISTENER (Sagt uns, ob gerade generell gearbeitet wird)
     _datalink.addProcessingListener((isProcessing) {
       if (mounted) {
         setState(() => _isProcessing = isProcessing);
@@ -380,6 +386,11 @@ Future<void> _pickAndSendFiles() async {
                 subtitle: _progressMessage,
                 mode: _progressMode,
                 label: "Processing", 
+                onCancel: () {
+                  if (_currentTransferId != null) {
+                    _datalink.cancelTransfer(_currentTransferId!);
+                  }
+                },
               ),
             
             Expanded(

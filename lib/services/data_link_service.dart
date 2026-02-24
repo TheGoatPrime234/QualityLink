@@ -40,6 +40,7 @@ class DataLinkService {
   final List<Transfer> _transfers = [];
   final Map<String, String> _activeOperations = {}; // transferId -> localFilePath
   final Set<String> _processedTransferIds = {};
+  final Set<String> _cancelledTransfers = {};
   
   // === CALLBACKS ===
   final List<Function(Transfer)> _transferListeners = [];
@@ -91,6 +92,20 @@ class DataLinkService {
 
     _isRunning = true;
     print("✅ DataLinkService started (Instant Mode)");
+  }
+
+  void cancelTransfer(String transferId) {
+    print("🛑 Cancelling transfer: $transferId");
+    _cancelledTransfers.add(transferId);
+    
+    final idx = _transfers.indexWhere((t) => t.id == transferId);
+    if (idx != -1) {
+      _updateTransferStatus(_transfers[idx], TransferStatus.cancelled);
+    }
+    
+    _notifyMessage("Transfer cancelled", isError: true);
+    _notifyProcessingState(false);
+    _activeOperations.remove(transferId);
   }
 
   Future<void> _sendHeartbeat() async {
@@ -271,7 +286,7 @@ class DataLinkService {
       print("⚠️ WS Message Parse Error: $e");
     }
   }
-  
+
   Future<void> _handleRemoteCommand(Map<String, dynamic> data) async {
     final action = data['action'];
     final params = data['params'];
@@ -632,6 +647,7 @@ class DataLinkService {
 
     for (var targetId in targetIds) {
       // 1. Dem Server Bescheid sagen ("Ich will was senden")
+      if (_cancelledTransfers.contains(transferId)) break;
       await _offerFile(
         filePath: file.path,
         targetId: targetId,
@@ -740,6 +756,11 @@ class DataLinkService {
     // Versuch 1: P2P Download
     bool p2pSuccess = await _tryP2PDownload(t, target);
     
+    if (_cancelledTransfers.contains(t.id)) {
+       print("🛑 Transfer aborted, skipping fallback.");
+       return;
+    }
+
     if (p2pSuccess) {
       _reportTransferEvent(t.id, "completed", "P2P");
       _updateTransferStatus(t, TransferStatus.completed);
@@ -804,6 +825,11 @@ class DataLinkService {
       final total = response.contentLength; // Kann -1 sein, falls nicht bekannt
 
       await for (var chunk in response) {
+        if (_cancelledTransfers.contains(transfer.id)) {
+           await sink.close();
+           client.close(force: true);
+           throw Exception("CANCELLED_BY_USER");
+        }
         sink.add(chunk);
         received += chunk.length;
         if (total > 0) {
@@ -966,6 +992,10 @@ class DataLinkService {
       Stream<List<int>> stream = file.openRead();
       
       await for (var chunk in stream) {
+        if (_cancelledTransfers.contains(transferId)) {
+           await request.sink.close();
+           throw Exception("CANCELLED_BY_USER");
+        }
         request.sink.add(chunk);
         sentFileBytes += chunk.length;
         // Updates reduzieren, um die UI flüssig zu halten
@@ -1008,6 +1038,10 @@ class DataLinkService {
       final total = response.contentLength ?? transfer.fileSize;
       
       await for (var chunk in response.stream) {
+        if (_cancelledTransfers.contains(transfer.id)) {
+           await sink.close();
+           throw Exception("CANCELLED_BY_USER");
+        }
         sink.add(chunk);
         received += chunk.length;
         _notifyProgress(transfer.id, received / total, "Downloading...");
@@ -1016,7 +1050,13 @@ class DataLinkService {
       await _reportTransferEvent(transfer.id, "completed", "Relay Download");
       _notifyMessage("✅ Downloaded: ${transfer.fileName}");
     } catch (e) {
-      _notifyMessage("Download error: $e", isError: true);
+      // 🔥 FIX: Teildatei löschen und keine rote Meldung werfen
+      if (e.toString().contains("CANCELLED_BY_USER") || _cancelledTransfers.contains(transfer.id)) {
+        print("🛑 Download properly aborted.");
+        try { if (targetFile.existsSync()) await targetFile.delete(); } catch (_) {}
+      } else {
+        _notifyMessage("Download error: $e", isError: true);
+      }
     } finally {
       _notifyProcessingState(false);
     }
