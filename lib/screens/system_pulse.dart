@@ -846,28 +846,21 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
   }
 
   bool _shouldShowInNormalMode(String line) {
-    if (line.contains("[CLEANUP]")) return false;
-    if (line.contains("[STORAGE]")) return false;
-    if (line.contains("uvicorn")) return false;
-    if (line.contains("Get all clipboard")) return false;
-    return true;
+    return line.contains("[USER]");
   }
 
   String _formatForNormalMode(String line) {
-    int infoIndex = line.indexOf("] ");
-    String content = line;
+    int userIndex = line.indexOf("[USER]");
     
-    if (infoIndex != -1 && infoIndex + 2 < line.length) {
-      content = line.substring(infoIndex + 2);
+    if (userIndex != -1) {
+      String content = line.substring(userIndex + 6).trim();
+      
+      content = content.replaceAll(RegExp(r'^\[.*?\]\s*'), '');
+      
+      return content;
     }
 
-    content = content.replaceAll("[SYSTEM]", "").trim();
-    content = content.replaceAll("[HYBRID]", "").trim();
-    content = content.replaceAll("[CLIPBOARD]", "").trim();
-    content = content.replaceAll("[RELAY]", "").trim();
-    content = content.replaceAll("[UPLOAD]", "").trim();
-
-    return content;
+    return line;
   }
 
   IconData _getIconForLine(String line) {

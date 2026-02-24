@@ -679,7 +679,7 @@ class FileVaultController extends ChangeNotifier {
 
         print("📡 Calling Remote: $url");
         
-        final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 10));
+        final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
         
         if (response.statusCode == 200) {
           final data = json.decode(response.body);

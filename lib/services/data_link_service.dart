@@ -29,6 +29,7 @@ class DataLinkService {
   String _clientId = "";
   String _myLocalIp = "0.0.0.0";
   String _downloadPath = "";
+  int _activeTasksCount = 0;
   
   HttpServer? _localServer;
   Timer? _syncTimer;
@@ -36,10 +37,12 @@ class DataLinkService {
   // ✅ NEU: WebSocket State
   WebSocketChannel? _wsChannel;
   bool _isWsConnected = false;
-  
+
+  final http.Client _httpClient = http.Client();
   final List<Transfer> _transfers = [];
   final Map<String, String> _activeOperations = {}; // transferId -> localFilePath
   final Set<String> _processedTransferIds = {};
+  final Set<String> _cancelledTransfers = {};
   
   // === CALLBACKS ===
   final List<Function(Transfer)> _transferListeners = [];
@@ -93,10 +96,24 @@ class DataLinkService {
     print("✅ DataLinkService started (Instant Mode)");
   }
 
+  void cancelTransfer(String transferId) {
+    print("🛑 Cancelling transfer: $transferId");
+    _cancelledTransfers.add(transferId);
+    
+    final idx = _transfers.indexWhere((t) => t.id == transferId);
+    if (idx != -1) {
+      _updateTransferStatus(_transfers[idx], TransferStatus.cancelled);
+    }
+    
+    _notifyMessage("Transfer cancelled", isError: true);
+    _notifyProcessingState(false);
+    _activeOperations.remove(transferId);
+  }
+
   Future<void> _sendHeartbeat() async {
     try {
       // Wir sagen dem Server: "Hier bin ich, das ist meine IP, das ist mein Port"
-      await http.post(
+      await _httpClient.post(
         Uri.parse('$serverBaseUrl/heartbeat'),
         headers: {"Content-Type": "application/json"},
         body: json.encode({
@@ -233,32 +250,44 @@ class DataLinkService {
         _handleRemoteCommand(data);
       }
       
-      // Fall C: RELAY UPDATE (Das hat gefehlt!)
-      // Der Server sagt: "Datei liegt jetzt auf der Festplatte bereit!"
       else if (event == 'transfer_update') {
           final transferData = data['transfer'];
-          // Wir bauen ein Transfer-Objekt aus den Daten
-          final transfer = Transfer.fromServerResponse(transferData);
           
-          // UI Update
-          _notifyTransferUpdate(transfer);
+          final transfer = Transfer.fromServerResponse({
+             'meta': transferData,
+             'status': transferData['status'] ?? 'RELAY_READY',
+             'timestamp': transferData['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+          });
+          
+          // 🔥 FIX 4: Transfer korrekt in die Liste eintragen/updaten, ohne "Complete" zu überschreiben
+          final existingIndex = _transfers.indexWhere((t) => t.id == transfer.id);
+          if (existingIndex != -1) {
+             if (_transfers[existingIndex].isCompleted) return; // Fertige in Ruhe lassen
+             _transfers[existingIndex] = transfer.copyWith(progress: _transfers[existingIndex].progress);
+             _notifyTransferUpdate(_transfers[existingIndex]);
+          } else {
+             _transfers.add(transfer);
+             _notifyTransferUpdate(transfer);
+          }
           
           // ENTSCHEIDUNG: Ist das für mich? Und ist es bereit?
           if (transfer.status == TransferStatus.relayReady && 
               !_processedTransferIds.contains(transfer.id) &&
-              _downloadPath.isNotEmpty) {
+              _downloadPath.isNotEmpty &&
+              transfer.targetIds.contains(_clientId)) { // 🔥 <--- Hinzugefügt!
                 
             print("🔔 Relay Download Triggered via WebSocket!");
-            // Download vom Pi starten
             _handleRelayReadyTransfer(transfer, _downloadPath);
           }
+      }
+      else if (event == 'clear_history') {
+          print("🧹 Server requested global history wipe!");
+          clearTransferHistory();
       }
     } catch (e) {
       print("⚠️ WS Message Parse Error: $e");
     }
   }
-  // ✅ NEUE METHODE: Führt Befehle vom Server aus
-  // In lib/services/data_link_service.dart
 
   Future<void> _handleRemoteCommand(Map<String, dynamic> data) async {
     final action = data['action'];
@@ -426,14 +455,32 @@ class DataLinkService {
     for (var l in _transferListeners) try { l(transfer); } catch (_) {}
   }
   void _notifyProgress(String id, double p, [String? m]) {
+    // 🔥 FIX 1: Fortschritt für die Liste unten (Activity Log) speichern!
+    final idx = _transfers.indexWhere((t) => t.id == id);
+    if (idx != -1) {
+      _transfers[idx] = _transfers[idx].copyWith(progress: p);
+      _notifyTransferUpdate(_transfers[idx]);
+    }
+
+    // UI Listener für die große Animation oben benachrichtigen
     for (var l in _progressListeners) try { l(id, p, m); } catch (_) {}
   }
   void _notifyMessage(String m, {bool isError = false}) {
     for (var l in _messageListeners) try { l(m, isError); } catch (_) {}
   }
   void _notifyProcessingState(bool isProcessing) {
-    _isProcessing = isProcessing;
-    for (var l in _processingListeners) try { l(isProcessing); } catch (_) {}
+    if (isProcessing) {
+      _activeTasksCount++;
+    } else {
+      _activeTasksCount--;
+      if (_activeTasksCount < 0) _activeTasksCount = 0;
+    }
+    bool newProcessingState = _activeTasksCount > 0;
+    
+    if (_isProcessing != newProcessingState) {
+      _isProcessing = newProcessingState;
+      for (var l in _processingListeners) try { l(_isProcessing); } catch (_) {}
+    }
   }
 
   // =============================================================================
@@ -458,8 +505,9 @@ class DataLinkService {
 
   Future<void> _syncTransfers() async {
     try {
-      final response = await http.get(
-        Uri.parse('$serverBaseUrl/transfer/check/$_clientId'),
+      // 🔥 FIX: Wir fragen jetzt /transfer/all ab (Global Log)
+      final response = await _httpClient.get(
+        Uri.parse('$serverBaseUrl/transfer/all'),
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
@@ -467,31 +515,39 @@ class DataLinkService {
         final List<dynamic> transferList = data['transfers'] ?? [];
         
         for (var transferData in transferList) {
-          final transfer = Transfer.fromServerResponse(transferData);
+          final transfer = Transfer.fromServerResponse({
+             'meta': transferData,
+             'status': transferData['status'] ?? 'OFFERED',
+             'timestamp': transferData['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+          });
+          
           final existingIndex = _transfers.indexWhere((t) => t.id == transfer.id);
           
           if (existingIndex != -1) {
             final oldTransfer = _transfers[existingIndex];
+            if (oldTransfer.isCompleted || oldTransfer.isFailed) continue;
+
             if (oldTransfer.status != transfer.status) {
-               _transfers[existingIndex] = transfer;
-               _notifyTransferUpdate(transfer);
+               _transfers[existingIndex] = transfer.copyWith(progress: oldTransfer.progress);
+               _notifyTransferUpdate(_transfers[existingIndex]);
             }
             
-            // Relay Ready Check (falls WS versagt hat)
+            // 🔥 WICHTIGER FIX: Download NUR, wenn ICH das Target bin!
             if (oldTransfer.status != TransferStatus.relayReady && 
                 transfer.status == TransferStatus.relayReady &&
                 !_processedTransferIds.contains(transfer.id) &&
-                _downloadPath.isNotEmpty) {
+                _downloadPath.isNotEmpty &&
+                transfer.targetIds.contains(_clientId)) { // <--- SICHERHEIT
               _handleRelayReadyTransfer(transfer, _downloadPath);
             }
           } else {
-            // Neuer Transfer (WS verpasst?)
             _transfers.add(transfer);
             _notifyTransferUpdate(transfer);
             
+            // 🔥 WICHTIGER FIX: P2P NUR versuchen, wenn ICH das Target bin!
             if (_downloadPath.isNotEmpty && !_processedTransferIds.contains(transfer.id)) {
-              if (transfer.status == TransferStatus.offered) {
-                print("⚠️ Polling picked up offer (WebSocket missed it?)");
+              if (transfer.status == TransferStatus.offered && transfer.targetIds.contains(_clientId)) { // <--- SICHERHEIT
+                print("⚠️ Polling picked up offer");
                 _handleOfferedTransfer(transfer, _downloadPath);
               }
             }
@@ -507,7 +563,13 @@ class DataLinkService {
 
   Future<void> _startLocalServer() async {
     try {
-      _localServer = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+      // 🔥 FIX: Fester Port (8002) für P2P-Transfers
+      try {
+        _localServer = await HttpServer.bind(InternetAddress.anyIPv4, 8002);
+      } catch (e) {
+        _localServer = await HttpServer.bind(InternetAddress.anyIPv4, 0); // Fallback
+      }
+      
       print("🌐 Local P2P server started on port ${_localServer!.port}");
       _localServer!.listen((request) async => await _handleP2PRequest(request));
     } catch (e) {
@@ -594,12 +656,19 @@ class DataLinkService {
 
     for (var targetId in targetIds) {
       // 1. Dem Server Bescheid sagen ("Ich will was senden")
+      if (_cancelledTransfers.contains(transferId)) break;
       await _offerFile(
         filePath: file.path,
         targetId: targetId,
         transferId: transferId,
         destinationPath: destinationPath,
       );
+
+      if (targetId == "SERVER") {
+         print("⚡ Target is SERVER. Bypassing P2P, requesting direct Upload...");
+         await _requestRelay(transferId, file.path);
+         continue; // Direkt zum nächsten Gerät springen
+      }
 
       // 2. Der entscheidende Moment: P2P oder Relay?
       try {
@@ -625,11 +694,15 @@ class DataLinkService {
   }
 
   Future<List<String>> sendFiles(List<File> files, List<String> targetIds, {String? destinationPath}) async {
-    final ids = <String>[];
-    for (var f in files) {
-      try { ids.add(await sendFile(f, targetIds, destinationPath: destinationPath)); } catch (e) { print(e); }
+    final futures = files.map((f) => sendFile(f, targetIds, destinationPath: destinationPath));
+    
+    try {
+      final ids = await Future.wait(futures);
+      return ids.toList();
+    } catch (e) {
+      print("Batch Upload Error: $e");
+      return [];
     }
-    return ids;
   }
 
   Future<String> sendFolder(Directory folder, List<String> targetIds, {Function(double, String)? onProgress}) async {
@@ -661,7 +734,7 @@ class DataLinkService {
     }
 
     try {
-      final response = await http.post(
+      final response = await _httpClient.post(
         Uri.parse('$serverBaseUrl/transfer/offer'),
         headers: {"Content-Type": "application/json"},
         body: json.encode({
@@ -696,6 +769,11 @@ class DataLinkService {
     // Versuch 1: P2P Download
     bool p2pSuccess = await _tryP2PDownload(t, target);
     
+    if (_cancelledTransfers.contains(t.id)) {
+       print("🛑 Transfer aborted, skipping fallback.");
+       return;
+    }
+
     if (p2pSuccess) {
       _reportTransferEvent(t.id, "completed", "P2P");
       _updateTransferStatus(t, TransferStatus.completed);
@@ -716,7 +794,7 @@ class DataLinkService {
   // Neue Hilfsmethode: Fordert den Sender auf, das Relay zu nutzen
   Future<void> _requestRelayFromSender(String transferId) async {
     try {
-      await http.post(
+      await _httpClient.post(
         Uri.parse('$serverBaseUrl/transfer/request_relay'),
         headers: {"Content-Type": "application/json"},
         body: json.encode({"transfer_id": transferId}),
@@ -742,23 +820,44 @@ class DataLinkService {
     _notifyProgress(transfer.id, 0.0, "Downloading (P2P)...");
 
     try {
-      final request = http.Request('GET', Uri.parse(transfer.directLink!));
-      final response = await http.Client().send(request).timeout(const Duration(seconds: 120));
+      // 🔥 FIX: HttpClient verwenden, um einen strikten Connection-Timeout zu setzen!
+      // Wenn das Gerät in einem anderen Netzwerk ist, schlägt dies in 3 Sekunden fehl 
+      // (anstatt nach 2 Minuten) und löst sofort den Cloud-Relay Fallback aus!
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 3);
 
-      if (response.statusCode != 200) throw Exception("HTTP ${response.statusCode}");
+      final request = await client.getUrl(Uri.parse(transfer.directLink!));
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        throw Exception("HTTP ${response.statusCode}");
+      }
 
       final sink = targetFile.openWrite();
       int received = 0;
-      final total = response.contentLength ?? transfer.fileSize;
+      final total = response.contentLength; // Kann -1 sein, falls nicht bekannt
 
-      await for (var chunk in response.stream) {
+      await for (var chunk in response) {
+        if (_cancelledTransfers.contains(transfer.id)) {
+           await sink.close();
+           client.close(force: true);
+           throw Exception("CANCELLED_BY_USER");
+        }
         sink.add(chunk);
         received += chunk.length;
-        _notifyProgress(transfer.id, received / total, "${_formatBytes(received)} / ${_formatBytes(total)}");
+        if (total > 0) {
+          _notifyProgress(transfer.id, received / total, "${_formatBytes(received)} / ${_formatBytes(total)}");
+        } else {
+          _notifyProgress(transfer.id, 0.5, "Downloading...");
+        }
       }
+      
       await sink.close();
+      client.close();
       return true;
+      
     } catch (e) {
+      print("❌ P2P Fast-Fail triggered: $e");
       try { if (targetFile.existsSync()) await targetFile.delete(); } catch (_) {}
       return false;
     } finally {
@@ -789,7 +888,7 @@ class DataLinkService {
       // ... (Rest der Funktion bleibt gleich, nur beim Aufruf unten cleanPath nutzen) ...
       
       final uri = Uri.parse('$serverBaseUrl/transfer/request_relay');
-      final response = await http.post(
+      final response = await _httpClient.post(
         uri,
         headers: {"Content-Type": "application/json"}, 
         body: json.encode({"transfer_id": transferId}),
@@ -818,7 +917,7 @@ class DataLinkService {
     // Wir schauen uns alle Transfers an, die wir gerade versenden ("activeOperations")
     for (var transferId in _activeOperations.keys.toList()) {
       try {
-        final response = await http.get(Uri.parse('$serverBaseUrl/transfer/status/$transferId'));
+        final response = await _httpClient.get(Uri.parse('$serverBaseUrl/transfer/status/$transferId'));
         
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
@@ -852,16 +951,13 @@ class DataLinkService {
       // ---------------------------------------------------------
       String cleanPath = filePath.trim();
 
-      // VERSUCH 1: Ist der Pfad URL-kodiert (enthält %20 etc.)? -> Dekodieren!
       if (cleanPath.contains('%')) {
         try { cleanPath = Uri.decodeFull(cleanPath); } catch (_) {}
       }
 
-      // VERSUCH 2: Windows-Slashes normalisieren
       cleanPath = p.normalize(cleanPath);
       File file = File(cleanPath);
       
-      // VERSUCH 3: Falls nicht gefunden, Symlinks prüfen
       if (!file.existsSync()) {
         try {
            cleanPath = file.resolveSymbolicLinksSync();
@@ -869,9 +965,7 @@ class DataLinkService {
         } catch (_) {}
       }
       
-      // FINALER CHECK
       if (!file.existsSync()) {
-        // Letzter Versuch: Manchmal hilft es, den Pfad "raw" zu lassen
         file = File(filePath);
         if (!file.existsSync()) {
            throw Exception("OS Error: File not found at '$cleanPath'");
@@ -879,10 +973,9 @@ class DataLinkService {
       }
       // ---------------------------------------------------------
 
-      final fileSize = file.lengthSync(); // Hier stürzte es vorher ab
+      final fileSize = file.lengthSync();
       final fileName = p.basename(cleanPath);
       
-      // WICHTIG: Dateinamen für den Server sicher machen (ASCII only für Header)
       final safeFileName = Uri.encodeComponent(fileName);
 
       print("🚀 Uploading $fileName to Relay");
@@ -895,12 +988,13 @@ class DataLinkService {
       
       final transferIdField = '--$boundary\r\nContent-Disposition: form-data; name="transfer_id"\r\n\r\n$transferId\r\n';
       
-      // Wir senden den "sicheren" Dateinamen im Header
       final fileHeader = '--$boundary\r\nContent-Disposition: form-data; name="file"; filename="$safeFileName"\r\nContent-Type: application/octet-stream\r\n\r\n';
       final endBoundary = '\r\n--$boundary--\r\n';
       
       final totalRequestSize = utf8.encode(transferIdField + fileHeader + endBoundary).length + fileSize;
       request.contentLength = totalRequestSize;
+      
+      final responseFuture = _httpClient.send(request);
       
       request.sink.add(utf8.encode(transferIdField));
       request.sink.add(utf8.encode(fileHeader));
@@ -909,8 +1003,13 @@ class DataLinkService {
       Stream<List<int>> stream = file.openRead();
       
       await for (var chunk in stream) {
+        if (_cancelledTransfers.contains(transferId)) {
+           await request.sink.close();
+           throw Exception("CANCELLED_BY_USER");
+        }
         request.sink.add(chunk);
         sentFileBytes += chunk.length;
+        // Updates reduzieren, um die UI flüssig zu halten
         if (sentFileBytes % (512 * 1024) == 0 || sentFileBytes == fileSize) {
            _notifyProgress(transferId, sentFileBytes / fileSize, "Uploading...");
         }
@@ -921,7 +1020,9 @@ class DataLinkService {
       
       _notifyProgress(transferId, 1.0, "Finalizing..."); 
       
-      final response = await request.send();
+      // 🔥 FIX 2: Jetzt warten wir auf die Server-Antwort des Streams, der im Hintergrund hochgeladen hat
+      final response = await responseFuture;
+      
       if (response.statusCode == 200) {
         _activeOperations.remove(transferId);
         _notifyMessage("☁️ Upload completed");
@@ -942,12 +1043,19 @@ class DataLinkService {
     _notifyProcessingState(true);
     _notifyProgress(transfer.id, 0.0, "Relay Download...");
     try {
-      final response = await http.Client().send(http.Request('GET', Uri.parse('$serverBaseUrl/download/relay/${transfer.id}')));
+      // 🔥 FIX: Auch hier den globalen Client für pfeilschnelle Keep-Alive Downloads!
+      final request = http.Request('GET', Uri.parse('$serverBaseUrl/download/relay/${transfer.id}'));
+      final response = await _httpClient.send(request);
+      
       final sink = targetFile.openWrite();
       int received = 0;
       final total = response.contentLength ?? transfer.fileSize;
       
       await for (var chunk in response.stream) {
+        if (_cancelledTransfers.contains(transfer.id)) {
+           await sink.close();
+           throw Exception("CANCELLED_BY_USER");
+        }
         sink.add(chunk);
         received += chunk.length;
         _notifyProgress(transfer.id, received / total, "Downloading...");
@@ -956,7 +1064,13 @@ class DataLinkService {
       await _reportTransferEvent(transfer.id, "completed", "Relay Download");
       _notifyMessage("✅ Downloaded: ${transfer.fileName}");
     } catch (e) {
-      _notifyMessage("Download error: $e", isError: true);
+      // 🔥 FIX: Teildatei löschen und keine rote Meldung werfen
+      if (e.toString().contains("CANCELLED_BY_USER") || _cancelledTransfers.contains(transfer.id)) {
+        print("🛑 Download properly aborted.");
+        try { if (targetFile.existsSync()) await targetFile.delete(); } catch (_) {}
+      } else {
+        _notifyMessage("Download error: $e", isError: true);
+      }
     } finally {
       _notifyProcessingState(false);
     }
@@ -998,7 +1112,7 @@ class DataLinkService {
 
   Future<void> _reportTransferEvent(String id, String event, String details) async {
     try {
-      await http.post(Uri.parse('$serverBaseUrl/transfer/report'),
+      await _httpClient.post(Uri.parse('$serverBaseUrl/transfer/report'),
         headers: {"Content-Type": "application/json"},
         body: json.encode({"transfer_id": id, "client_id": _clientId, "event": event, "details": details}));
     } catch (_) {}
@@ -1007,7 +1121,12 @@ class DataLinkService {
   void _updateTransferStatus(Transfer t, TransferStatus s) {
     final idx = _transfers.indexWhere((tr) => tr.id == t.id);
     if (idx != -1) {
-      final updated = t.copyWith(status: s, completedAt: s == TransferStatus.completed ? DateTime.now() : null);
+      final updated = t.copyWith(
+        status: s, 
+        completedAt: s == TransferStatus.completed ? DateTime.now() : null,
+        // 🔥 FIX 2: Wenn fertig, hart auf 100% (1.0) setzen
+        progress: s == TransferStatus.completed ? 1.0 : _transfers[idx].progress, 
+      );
       _transfers[idx] = updated;
       _notifyTransferUpdate(updated);
     }

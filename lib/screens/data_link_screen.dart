@@ -55,6 +55,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
   String? _systemDownloadPath;
   List<String> _customPaths = [];
   bool _serviceStarted = false;
+  String? _currentTransferId;
 
   @override
   void initState() {
@@ -130,6 +131,7 @@ Future<void> _initializeServices() async {
   }
 
   void _setupDataLinkListeners() {
+    // 1. TRANSFER LISTENER (Aktualisiert die Liste der Transfers)
     _datalink.addTransferListener((transfer) {
       if (mounted) {
         setState(() {
@@ -143,9 +145,11 @@ Future<void> _initializeServices() async {
       }
     });
 
+    // 2. PROGRESS LISTENER (Aktualisiert Ladebalken & Overlay)
     _datalink.addProgressListener((id, progress, message) {
       if (mounted) {
         setState(() {
+          _currentTransferId = id; // 🔥 HIER wird die ID für den Cancel-Button gespeichert
           _progressValue = progress;
           _progressMessage = message ?? "";
           
@@ -168,6 +172,7 @@ Future<void> _initializeServices() async {
       }
     });
 
+    // 3. MESSAGE LISTENER (Für Popups unten am Bildschirmrand)
     _datalink.addMessageListener((message, isError) {
       _showSnack(message, isError: isError);
       if (isError && Platform.isAndroid) {
@@ -183,11 +188,11 @@ Future<void> _initializeServices() async {
       }
     });
 
+    // 4. HISTORY CLEARED LISTENER (Wenn der Server den Log löscht)
     _datalink.addHistoryClearedListener(() {
       if (mounted) {
         setState(() {
           _transfers.clear();
-          // Optional: Auch laufende Progress Bars resetten
           _progressValue = 0.0;
           _progressMessage = "";
           _isProcessing = false;
@@ -196,6 +201,7 @@ Future<void> _initializeServices() async {
       }
     });
 
+    // 5. PROCESSING LISTENER (Sagt uns, ob gerade generell gearbeitet wird)
     _datalink.addProcessingListener((isProcessing) {
       if (mounted) {
         setState(() => _isProcessing = isProcessing);
@@ -267,6 +273,70 @@ Future<void> _locateSystemDownloadFolder() async {
     return _selectedPath == "DEFAULT"
         ? (_systemDownloadPath ?? "")
         : _selectedPath;
+  }
+
+  void _showTransferDetails(Transfer transfer) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.card,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: AppColors.primary, width: 1),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.info_outline, color: AppColors.primary),
+            SizedBox(width: 10),
+            Text("TRANSFER DETAILS", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildDetailRow("File", transfer.fileName),
+            _buildDetailRow("Size", transfer.sizeFormatted),
+            const Divider(color: Colors.white24),
+            _buildDetailRow("Sender", transfer.senderName ?? transfer.senderId),
+            _buildDetailRow("Target", transfer.targetName ?? transfer.targetIds.first),
+            const Divider(color: Colors.white24),
+            _buildDetailRow(
+              "Status", 
+              transfer.status.name.toUpperCase(), 
+              color: transfer.isFailed ? AppColors.warning : (transfer.isCompleted ? AppColors.primary : AppColors.accent)
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("CLOSE", style: TextStyle(color: Colors.grey)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value, {Color? color}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 70,
+            child: Text(label, style: const TextStyle(color: AppColors.textDim, fontSize: 12)),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(color: color ?? Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _ensureOverlayServiceStarted() async {
@@ -380,6 +450,11 @@ Future<void> _pickAndSendFiles() async {
                 subtitle: _progressMessage,
                 mode: _progressMode,
                 label: "Processing", 
+                onCancel: () {
+                  if (_currentTransferId != null) {
+                    _datalink.cancelTransfer(_currentTransferId!);
+                  }
+                },
               ),
             
             Expanded(
@@ -657,7 +732,8 @@ Future<void> _pickAndSendFiles() async {
     }
 
     return ListTile(
-      visualDensity: const VisualDensity(horizontal: 0, vertical: -3), 
+      onTap: () => _showTransferDetails(transfer),
+      visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
       minVerticalPadding: 0, 
       leading: Icon(icon, color: iconColor), 

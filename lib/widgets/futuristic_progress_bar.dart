@@ -12,10 +12,11 @@ enum ProgressBarMode {
 }
 
 class FuturisticProgressBar extends StatefulWidget {
-  final double progress; // 0.0 - 1.0
+  final double progress; 
   final String label;
   final ProgressBarMode mode;
-  final String? subtitle; // Optional: "512 MB / 1024 MB"
+  final String? subtitle; 
+  final VoidCallback? onCancel; // 🔥 NEU: Cancel Callback
 
   const FuturisticProgressBar({
     super.key,
@@ -23,6 +24,7 @@ class FuturisticProgressBar extends StatefulWidget {
     required this.label,
     required this.mode,
     this.subtitle,
+    this.onCancel, // 🔥 NEU
   });
 
   @override
@@ -74,68 +76,78 @@ class _FuturisticProgressBarState extends State<FuturisticProgressBar>
     }
   }
 
-  @override
+@override
   Widget build(BuildContext context) {
     final color = _getColor();
     final icon = _getIcon();
 
-    return Container(
+    // 🔥 FIX: Mit GestureDetector umschließen, um Klicks abzufangen
+    return GestureDetector(
+      onTap: widget.onCancel,
+      child: Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF0A0A0A),
-        border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
+        border: Border.all(color: color.withOpacity(0.3), width: 1),
         boxShadow: [
           BoxShadow(
-            color: color.withValues(alpha: 0.2),
+            color: color.withOpacity(0.2),
             blurRadius: 20,
             spreadRadius: 2,
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header
-          Row(
-            children: [
-              Text(
-                icon,
-                style: const TextStyle(fontSize: 20),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  widget.label,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(
+              children: [
+                Text(
+                  icon,
+                  style: const TextStyle(fontSize: 20),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    widget.label,
+                    style: TextStyle(
+                      color: color,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+                Text(
+                  "${(widget.progress * 100).toStringAsFixed(0)}%",
                   style: TextStyle(
                     color: color,
                     fontWeight: FontWeight.bold,
-                    fontSize: 14,
+                    fontSize: 16,
                   ),
                 ),
-              ),
+                // 🔥 NEU: Das X-Icon wird direkt neben der %-Anzeige in die Row eingefügt
+                if (widget.onCancel != null) ...[
+                  const SizedBox(width: 12),
+                  Icon(Icons.cancel_outlined, color: color, size: 20),
+                ]
+              ],
+            ),
+
+            if (widget.subtitle != null) ...[
+              const SizedBox(height: 4),
               Text(
-                "${(widget.progress * 100).toStringAsFixed(0)}%",
-                style: TextStyle(
-                  color: color,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+                widget.subtitle!,
+                style: const TextStyle(
+                  color: Colors.grey,
+                  fontSize: 10,
                 ),
               ),
             ],
-          ),
 
-          if (widget.subtitle != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              widget.subtitle!,
-              style: const TextStyle(
-                color: Colors.grey,
-                fontSize: 10,
-              ),
-            ),
-          ],
-
-          const SizedBox(height: 12),
+            const SizedBox(height: 12),
+            
+            // ... (Hier geht es ganz normal mit Stack und Progress Bar weiter) ...
 
           // Progress Bar
           Stack(
@@ -145,7 +157,7 @@ class _FuturisticProgressBarState extends State<FuturisticProgressBar>
                 height: 8,
                 decoration: BoxDecoration(
                   color: const Color(0xFF1A1A1A),
-                  border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
+                  border: Border.all(color: color.withOpacity(0.3), width: 1),
                 ),
               ),
 
@@ -161,9 +173,9 @@ class _FuturisticProgressBarState extends State<FuturisticProgressBar>
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           colors: [
-                            color.withValues(alpha: 0.0),
+                            color.withOpacity(0.0),
                             color,
-                            color.withValues(alpha: 0.0),
+                            color.withOpacity(0.0),
                           ],
                         ),
                         boxShadow: [
@@ -188,7 +200,7 @@ class _FuturisticProgressBarState extends State<FuturisticProgressBar>
                     gradient: LinearGradient(
                       colors: [
                         color,
-                        color.withValues(alpha: 0.6),
+                        color.withOpacity(0.6),
                       ],
                       begin: Alignment.centerLeft,
                       end: Alignment.centerRight,
@@ -231,6 +243,7 @@ class _FuturisticProgressBarState extends State<FuturisticProgressBar>
           ),
         ],
       ),
+      ),
     );
   }
 }
@@ -246,7 +259,7 @@ class HexagonPatternPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = color.withValues(alpha: 0.1)
+      ..color = color.withOpacity(0.1)
       ..strokeWidth = 0.5
       ..style = PaintingStyle.stroke;
 

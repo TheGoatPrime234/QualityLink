@@ -60,7 +60,13 @@ class FileServerService {
       }
       
       // Server starten
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+      try {
+        _server = await HttpServer.bind(InternetAddress.anyIPv4, 8001);
+      } catch (e) {
+        print("⚠️ Port 8001 belegt, weiche auf zufälligen Port aus...");
+        _server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+      }
+      
       _port = _server!.port;
       _isRunning = true;
 
@@ -595,7 +601,7 @@ class FileServerService {
   }
 
   static Future<void> syncLocalIndex(String serverUrl, String myClientId) async {
-    if (_availablePaths.isEmpty) await start(); // Sicherstellen, dass wir Pfade haben
+    if (_availablePaths.isEmpty) await start(); 
 
     print("🔄 Scanning local files for index sync...");
     List<Map<String, dynamic>> fullIndex = [];
@@ -603,21 +609,31 @@ class FileServerService {
     for (var path in _availablePaths) {
       final dir = Directory(path);
       if (await dir.exists()) {
-        await _scanDirectoryRecursive(dir, fullIndex, maxDepth: 4); // Max Tiefe 4 gegen Endlosschleifen
+        await _scanDirectoryRecursive(dir, fullIndex, maxDepth: 4); 
       }
     }
 
     print("📤 Pushing index (${fullIndex.length} items) to server...");
     
     try {
+      // 1. JSON-String erstellen
+      final jsonString = json.encode({
+        "client_id": myClientId,
+        "files": fullIndex
+      });
+
+      // 🔥 FIX: JSON-String komprimieren (GZip)
+      final compressedBody = gzip.encode(utf8.encode(jsonString));
+
+      // 3. Komprimierte Bytes senden und dem Server per Header Bescheid sagen
       final response = await http.post(
         Uri.parse('$serverUrl/index/push'),
-        headers: {"Content-Type": "application/json"},
-        body: json.encode({
-          "client_id": myClientId,
-          "files": fullIndex
-        }),
-      );
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Encoding": "gzip", // <--- WICHTIG! Sagt dem Server, dass es gepackt ist
+        },
+        body: compressedBody, // Wir senden jetzt die rohen, komprimierten Bytes
+      ).timeout(const Duration(seconds: 30)); // Timeout zur Sicherheit etwas erhöhen
       
       if (response.statusCode == 200) {
         print("✅ Index sync successful!");
