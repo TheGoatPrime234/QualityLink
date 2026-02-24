@@ -271,10 +271,10 @@ class DataLinkService {
           // ENTSCHEIDUNG: Ist das für mich? Und ist es bereit?
           if (transfer.status == TransferStatus.relayReady && 
               !_processedTransferIds.contains(transfer.id) &&
-              _downloadPath.isNotEmpty) {
+              _downloadPath.isNotEmpty &&
+              transfer.targetIds.contains(_clientId)) { // 🔥 <--- Hinzugefügt!
                 
             print("🔔 Relay Download Triggered via WebSocket!");
-            // Download vom Pi starten
             _handleRelayReadyTransfer(transfer, _downloadPath);
           }
       }
@@ -493,8 +493,9 @@ class DataLinkService {
 
   Future<void> _syncTransfers() async {
     try {
+      // 🔥 FIX: Wir fragen jetzt /transfer/all ab (Global Log)
       final response = await http.get(
-        Uri.parse('$serverBaseUrl/transfer/check/$_clientId'),
+        Uri.parse('$serverBaseUrl/transfer/all'),
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
@@ -502,7 +503,6 @@ class DataLinkService {
         final List<dynamic> transferList = data['transfers'] ?? [];
         
         for (var transferData in transferList) {
-          // 🔥 FIX 2: Auch beim Polling-Fallback die Daten richtig wrappen!
           final transfer = Transfer.fromServerResponse({
              'meta': transferData,
              'status': transferData['status'] ?? 'OFFERED',
@@ -513,32 +513,29 @@ class DataLinkService {
           
           if (existingIndex != -1) {
             final oldTransfer = _transfers[existingIndex];
-            
-            // 🔥 FIX 3: Wenn der Download lokal fertig ist, ignorieren wir das Server-Update!
-            // Ansonsten überschreibt der Server das "Complete" sofort wieder mit "Relay_Ready"
             if (oldTransfer.isCompleted || oldTransfer.isFailed) continue;
 
             if (oldTransfer.status != transfer.status) {
-               // Lokalen Fortschritt beim Status-Wechsel beibehalten
                _transfers[existingIndex] = transfer.copyWith(progress: oldTransfer.progress);
                _notifyTransferUpdate(_transfers[existingIndex]);
             }
             
-            // Relay Ready Check
+            // 🔥 WICHTIGER FIX: Download NUR, wenn ICH das Target bin!
             if (oldTransfer.status != TransferStatus.relayReady && 
                 transfer.status == TransferStatus.relayReady &&
                 !_processedTransferIds.contains(transfer.id) &&
-                _downloadPath.isNotEmpty) {
+                _downloadPath.isNotEmpty &&
+                transfer.targetIds.contains(_clientId)) { // <--- SICHERHEIT
               _handleRelayReadyTransfer(transfer, _downloadPath);
             }
           } else {
-            // Neuer Transfer (WS verpasst?)
             _transfers.add(transfer);
             _notifyTransferUpdate(transfer);
             
+            // 🔥 WICHTIGER FIX: P2P NUR versuchen, wenn ICH das Target bin!
             if (_downloadPath.isNotEmpty && !_processedTransferIds.contains(transfer.id)) {
-              if (transfer.status == TransferStatus.offered) {
-                print("⚠️ Polling picked up offer (WebSocket missed it?)");
+              if (transfer.status == TransferStatus.offered && transfer.targetIds.contains(_clientId)) { // <--- SICHERHEIT
+                print("⚠️ Polling picked up offer");
                 _handleOfferedTransfer(transfer, _downloadPath);
               }
             }

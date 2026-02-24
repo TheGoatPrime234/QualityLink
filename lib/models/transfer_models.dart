@@ -34,6 +34,9 @@ class Transfer {
   final DateTime? completedAt;
   final String? errorMessage;
   final String? destinationPath;
+  
+  final String? senderName; // 🔥 NEU
+  final String? targetName; // 🔥 NEU
 
   Transfer({
     required this.id,
@@ -50,6 +53,8 @@ class Transfer {
     this.completedAt,
     this.errorMessage,
     this.destinationPath,
+    this.senderName, // 🔥 NEU
+    this.targetName, // 🔥 NEU
   }) : createdAt = createdAt ?? DateTime.now();
 
   Transfer copyWith({
@@ -67,6 +72,8 @@ class Transfer {
     DateTime? completedAt,
     String? errorMessage,
     String? destinationPath,
+    String? senderName,
+    String? targetName,
   }) {
     return Transfer(
       id: id ?? this.id,
@@ -83,10 +90,11 @@ class Transfer {
       completedAt: completedAt ?? this.completedAt,
       errorMessage: errorMessage ?? this.errorMessage,
       destinationPath: destinationPath ?? this.destinationPath,
+      senderName: senderName ?? this.senderName,
+      targetName: targetName ?? this.targetName,
     );
   }
 
-  // Server response zu Transfer
   factory Transfer.fromServerResponse(Map<String, dynamic> json) {
     final meta = json['meta'] as Map<String, dynamic>;
     final statusStr = json['status'] as String;
@@ -100,17 +108,12 @@ class Transfer {
       default: status = TransferStatus.offered;
     }
 
-    // ✅ LOGIK: Pfad wiederherstellen
     String? destPath = meta['destination_path'] as String?;
-    
-    // Wenn der Server das Feld gelöscht hat, holen wir es aus dem Link zurück
     if (destPath == null && meta['direct_link'] != null) {
       try {
         final uri = Uri.parse(meta['direct_link']);
-        destPath = uri.queryParameters['save_path']; // Hier lesen wir es aus!
-      } catch (e) {
-        // Ignorieren bei Parse-Fehlern
-      }
+        destPath = uri.queryParameters['save_path'];
+      } catch (e) {}
     }
 
     return Transfer(
@@ -124,28 +127,23 @@ class Transfer {
       createdAt: DateTime.fromMillisecondsSinceEpoch(
         (json['timestamp'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch,
       ),
-      destinationPath: destPath, // ✅ Der wiederhergestellte Pfad
+      destinationPath: destPath,
+      senderName: meta['sender_name'] as String?, // 🔥 NEU
+      targetName: meta['target_name'] as String?, // 🔥 NEU
     );
   }
 
   String get sizeFormatted {
     if (fileSize < 1024) return "$fileSize B";
     if (fileSize < 1024 * 1024) return "${(fileSize / 1024).toStringAsFixed(1)} KB";
-    if (fileSize < 1024 * 1024 * 1024) {
-      return "${(fileSize / 1024 / 1024).toStringAsFixed(1)} MB";
-    }
+    if (fileSize < 1024 * 1024 * 1024) return "${(fileSize / 1024 / 1024).toStringAsFixed(1)} MB";
     return "${(fileSize / 1024 / 1024 / 1024).toStringAsFixed(2)} GB";
   }
-
-  String get progressFormatted {
-    return "${(progress * 100).toStringAsFixed(0)}%";
-  }
-
+  String get progressFormatted => "${(progress * 100).toStringAsFixed(0)}%";
   bool get isCompleted => status == TransferStatus.completed;
   bool get isFailed => status == TransferStatus.failed;
   bool get isActive => !isCompleted && !isFailed && status != TransferStatus.cancelled;
 }
-
 // =============================================================================
 // PEER MODEL
 // =============================================================================

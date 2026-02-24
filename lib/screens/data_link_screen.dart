@@ -275,6 +275,70 @@ Future<void> _locateSystemDownloadFolder() async {
         : _selectedPath;
   }
 
+  void _showTransferDetails(Transfer transfer) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.card,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: AppColors.primary, width: 1),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.info_outline, color: AppColors.primary),
+            SizedBox(width: 10),
+            Text("TRANSFER DETAILS", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildDetailRow("File", transfer.fileName),
+            _buildDetailRow("Size", transfer.sizeFormatted),
+            const Divider(color: Colors.white24),
+            _buildDetailRow("Sender", transfer.senderName ?? transfer.senderId),
+            _buildDetailRow("Target", transfer.targetName ?? transfer.targetIds.first),
+            const Divider(color: Colors.white24),
+            _buildDetailRow(
+              "Status", 
+              transfer.status.name.toUpperCase(), 
+              color: transfer.isFailed ? AppColors.warning : (transfer.isCompleted ? AppColors.primary : AppColors.accent)
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("CLOSE", style: TextStyle(color: Colors.grey)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value, {Color? color}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 70,
+            child: Text(label, style: const TextStyle(color: AppColors.textDim, fontSize: 12)),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(color: color ?? Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _ensureOverlayServiceStarted() async {
     if (!Platform.isAndroid) return;
 
@@ -668,7 +732,8 @@ Future<void> _pickAndSendFiles() async {
     }
 
     return ListTile(
-      visualDensity: const VisualDensity(horizontal: 0, vertical: -3), 
+      onTap: () => _showTransferDetails(transfer),
+      visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
       minVerticalPadding: 0, 
       leading: Icon(icon, color: iconColor), 
