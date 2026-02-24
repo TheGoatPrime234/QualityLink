@@ -29,6 +29,7 @@ class DataLinkService {
   String _clientId = "";
   String _myLocalIp = "0.0.0.0";
   String _downloadPath = "";
+  int _activeTasksCount = 0;
   
   HttpServer? _localServer;
   Timer? _syncTimer;
@@ -36,7 +37,8 @@ class DataLinkService {
   // ✅ NEU: WebSocket State
   WebSocketChannel? _wsChannel;
   bool _isWsConnected = false;
-  
+
+  final http.Client _httpClient = http.Client();
   final List<Transfer> _transfers = [];
   final Map<String, String> _activeOperations = {}; // transferId -> localFilePath
   final Set<String> _processedTransferIds = {};
@@ -111,7 +113,7 @@ class DataLinkService {
   Future<void> _sendHeartbeat() async {
     try {
       // Wir sagen dem Server: "Hier bin ich, das ist meine IP, das ist mein Port"
-      await http.post(
+      await _httpClient.post(
         Uri.parse('$serverBaseUrl/heartbeat'),
         headers: {"Content-Type": "application/json"},
         body: json.encode({
@@ -467,8 +469,18 @@ class DataLinkService {
     for (var l in _messageListeners) try { l(m, isError); } catch (_) {}
   }
   void _notifyProcessingState(bool isProcessing) {
-    _isProcessing = isProcessing;
-    for (var l in _processingListeners) try { l(isProcessing); } catch (_) {}
+    if (isProcessing) {
+      _activeTasksCount++;
+    } else {
+      _activeTasksCount--;
+      if (_activeTasksCount < 0) _activeTasksCount = 0;
+    }
+    bool newProcessingState = _activeTasksCount > 0;
+    
+    if (_isProcessing != newProcessingState) {
+      _isProcessing = newProcessingState;
+      for (var l in _processingListeners) try { l(_isProcessing); } catch (_) {}
+    }
   }
 
   // =============================================================================
@@ -494,7 +506,7 @@ class DataLinkService {
   Future<void> _syncTransfers() async {
     try {
       // 🔥 FIX: Wir fragen jetzt /transfer/all ab (Global Log)
-      final response = await http.get(
+      final response = await _httpClient.get(
         Uri.parse('$serverBaseUrl/transfer/all'),
       ).timeout(const Duration(seconds: 10));
 
@@ -682,11 +694,15 @@ class DataLinkService {
   }
 
   Future<List<String>> sendFiles(List<File> files, List<String> targetIds, {String? destinationPath}) async {
-    final ids = <String>[];
-    for (var f in files) {
-      try { ids.add(await sendFile(f, targetIds, destinationPath: destinationPath)); } catch (e) { print(e); }
+    final futures = files.map((f) => sendFile(f, targetIds, destinationPath: destinationPath));
+    
+    try {
+      final ids = await Future.wait(futures);
+      return ids.toList();
+    } catch (e) {
+      print("Batch Upload Error: $e");
+      return [];
     }
-    return ids;
   }
 
   Future<String> sendFolder(Directory folder, List<String> targetIds, {Function(double, String)? onProgress}) async {
@@ -718,7 +734,7 @@ class DataLinkService {
     }
 
     try {
-      final response = await http.post(
+      final response = await _httpClient.post(
         Uri.parse('$serverBaseUrl/transfer/offer'),
         headers: {"Content-Type": "application/json"},
         body: json.encode({
@@ -778,7 +794,7 @@ class DataLinkService {
   // Neue Hilfsmethode: Fordert den Sender auf, das Relay zu nutzen
   Future<void> _requestRelayFromSender(String transferId) async {
     try {
-      await http.post(
+      await _httpClient.post(
         Uri.parse('$serverBaseUrl/transfer/request_relay'),
         headers: {"Content-Type": "application/json"},
         body: json.encode({"transfer_id": transferId}),
@@ -872,7 +888,7 @@ class DataLinkService {
       // ... (Rest der Funktion bleibt gleich, nur beim Aufruf unten cleanPath nutzen) ...
       
       final uri = Uri.parse('$serverBaseUrl/transfer/request_relay');
-      final response = await http.post(
+      final response = await _httpClient.post(
         uri,
         headers: {"Content-Type": "application/json"}, 
         body: json.encode({"transfer_id": transferId}),
@@ -901,7 +917,7 @@ class DataLinkService {
     // Wir schauen uns alle Transfers an, die wir gerade versenden ("activeOperations")
     for (var transferId in _activeOperations.keys.toList()) {
       try {
-        final response = await http.get(Uri.parse('$serverBaseUrl/transfer/status/$transferId'));
+        final response = await _httpClient.get(Uri.parse('$serverBaseUrl/transfer/status/$transferId'));
         
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
@@ -978,9 +994,7 @@ class DataLinkService {
       final totalRequestSize = utf8.encode(transferIdField + fileHeader + endBoundary).length + fileSize;
       request.contentLength = totalRequestSize;
       
-      // 🔥 FIX 1: Die Verbindung MUSS gestartet werden, BEVOR wir die Datei in den Speicher streamen!
-      // Sonst blockiert der Arbeitsspeicher bei größeren Dateien und der Upload hängt sich auf.
-      final responseFuture = request.send();
+      final responseFuture = _httpClient.send(request);
       
       request.sink.add(utf8.encode(transferIdField));
       request.sink.add(utf8.encode(fileHeader));
@@ -1029,7 +1043,10 @@ class DataLinkService {
     _notifyProcessingState(true);
     _notifyProgress(transfer.id, 0.0, "Relay Download...");
     try {
-      final response = await http.Client().send(http.Request('GET', Uri.parse('$serverBaseUrl/download/relay/${transfer.id}')));
+      // 🔥 FIX: Auch hier den globalen Client für pfeilschnelle Keep-Alive Downloads!
+      final request = http.Request('GET', Uri.parse('$serverBaseUrl/download/relay/${transfer.id}'));
+      final response = await _httpClient.send(request);
+      
       final sink = targetFile.openWrite();
       int received = 0;
       final total = response.contentLength ?? transfer.fileSize;
@@ -1095,7 +1112,7 @@ class DataLinkService {
 
   Future<void> _reportTransferEvent(String id, String event, String details) async {
     try {
-      await http.post(Uri.parse('$serverBaseUrl/transfer/report'),
+      await _httpClient.post(Uri.parse('$serverBaseUrl/transfer/report'),
         headers: {"Content-Type": "application/json"},
         body: json.encode({"transfer_id": id, "client_id": _clientId, "event": event, "details": details}));
     } catch (_) {}
