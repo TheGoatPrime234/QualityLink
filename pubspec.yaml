@@ -43,7 +43,7 @@ dependencies:
   intl: ^0.20.2
   receive_sharing_intent: ^1.8.1
   chewie: ^1.13.0
-  flutter_pdfview: ^1.4.4
+  syncfusion_flutter_pdfviewer: ^31.1.21
 
 dev_dependencies:
   flutter_test:
