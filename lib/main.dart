@@ -20,6 +20,7 @@ import 'services/file_server_service.dart';
 import 'services/data_link_service.dart';
 import 'services/heartbeat_service.dart';
 import 'config/server_config.dart';
+import 'services/device_manager.dart';
 
 import 'ui/theme_constants.dart';
 import 'layout/responsive_shell.dart';
@@ -216,12 +217,12 @@ class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingOb
       print("📱 App minimiert -> Aktiviere Daten-Spar-Modus");
       _heartbeatService.pause();
       DataLinkService().pause();
-    } 
-    // Wenn die App wieder in den Fokus rückt
-    else if (state == AppLifecycleState.resumed) {
+      DeviceManager().pause(); // 🔥 NEU
+    } else if (state == AppLifecycleState.resumed) {
       print("📱 App im Fokus -> Volle Geschwindigkeit");
       _heartbeatService.resume();
       DataLinkService().resume();
+      DeviceManager().resume(); // 🔥 NEU
     }
   }
 
@@ -262,6 +263,7 @@ class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingOb
       deviceName: _myDeviceName,
       fileServerPort: port,
     );
+    DeviceManager().start(_heartbeatService.localIp);
     
     setState(() {
       _isInitializing = false;

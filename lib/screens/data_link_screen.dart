@@ -14,6 +14,7 @@ import '../services/heartbeat_service.dart';
 import '../services/overlay_foreground_service.dart';
 import '../models/transfer_models.dart';
 import '../widgets/futuristic_progress_bar.dart';
+import '../services/device_manager.dart';
 
 import '../ui/theme_constants.dart';
 import '../ui/tech_card.dart';
@@ -42,7 +43,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
   final DataLinkService _datalink = DataLinkService();
   final HeartbeatService _heartbeat = HeartbeatService();
   
-  List<Peer> _peers = [];
+  List<NetworkDevice> _peers = [];
   List<Transfer> _transfers = [];
   final Set<String> _selectedPeerIds = {};
   
@@ -68,7 +69,16 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    OverlayForegroundService.stop();
+    
+    // 🔥 FIX 3: Alte Listener aufräumen, damit sich beim Tab-Wechsel nichts aufstaut!
+    _heartbeat.clearListeners();
+    _datalink.removeAllListeners();
+    
+    // Bonus-Fix: Die Notification (Overlay) nur schließen, wenn WIRKLICH nichts mehr lädt!
+    if (!_datalink.isProcessing) {
+      OverlayForegroundService.stop();
+    }
+    
     super.dispose();
   }
 
@@ -117,23 +127,18 @@ Future<void> _initializeServices() async {
   }
 
   void _setupHeartbeatService() {
-    // 🔥 FIX: Sofort den letzten bekannten Stand aus dem RAM laden (0 Millisekunden Ladezeit)
-    if (_heartbeat.lastKnownPeers.isNotEmpty) {
-      _peers = _heartbeat.lastKnownPeers
-          .map((p) => Peer.fromJson(p, _heartbeat.localIp))
-          .toList();
-    }
+    // 1. Sofort laden!
+    _peers = DeviceManager().devices;
+
+    // 2. Auf globale Updates des DeviceManagers hören
+    DeviceManager().addListener(() {
+      if (mounted) {
+        setState(() => _peers = DeviceManager().devices);
+      }
+    });
 
     _heartbeat.addConnectionListener((isConnected) {
       if (mounted) setState(() => _isConnected = isConnected);
-    });
-
-    _heartbeat.addPeerListener((peers) {
-      if (mounted) {
-        setState(() {
-          _peers = peers.map((p) => Peer.fromJson(p, _heartbeat.localIp)).toList();
-        });
-      }
     });
 
     setState(() => _isConnected = _heartbeat.isConnected);
@@ -577,7 +582,7 @@ Future<void> _pickAndSendFiles() async {
     );
   }
 
-  Widget _buildPeerList(List<Peer> peers) {
+  Widget _buildPeerList(List<NetworkDevice> peers) {
     return SizedBox(
       height: 100,
       child: ListView.builder(

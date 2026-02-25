@@ -145,62 +145,6 @@ class Transfer {
   bool get isActive => !isCompleted && !isFailed && status != TransferStatus.cancelled;
 }
 // =============================================================================
-// PEER MODEL
-// =============================================================================
-
-class Peer {
-  final String id;
-  final String name;
-  final String type;
-  final String ip;
-  final bool isSameLan;
-  final DateTime lastSeen;
-
-  Peer({
-    required this.id,
-    required this.name,
-    required this.type,
-    required this.ip,
-    this.isSameLan = false,
-    DateTime? lastSeen,
-  }) : lastSeen = lastSeen ?? DateTime.now();
-
-  factory Peer.fromJson(Map<String, dynamic> json, String myIp) {
-    final peerIp = json['ip'] as String;
-    final isSameLan = _isSameSubnet(myIp, peerIp);
-    
-    return Peer(
-      id: json['id'] as String,
-      name: json['name'] as String,
-      type: json['type'] as String,
-      ip: peerIp,
-      isSameLan: isSameLan,
-    );
-  }
-
-  static bool _isSameSubnet(String ip1, String ip2) {
-    try {
-      // 🔥 FIX: Wenn beide Geräte im Tailscale/VPN-Netz (100.x.x.x) sind,
-      // können sie direkt kommunizieren. Sie gelten also als "Same LAN"!
-      if (ip1.startsWith('100.') && ip2.startsWith('100.')) {
-        return true;
-      }
-
-      final parts1 = ip1.split('.');
-      final parts2 = ip2.split('.');
-      if (parts1.length != 4 || parts2.length != 4) return false;
-      
-      // Vergleiche erste 3 Oktette (normales /24 Heim-WLAN)
-      return parts1[0] == parts2[0] && 
-             parts1[1] == parts2[1] && 
-             parts1[2] == parts2[2];
-    } catch (e) {
-      return false;
-    }
-  }
-}
-
-// =============================================================================
 // ZIP PROGRESS (für Isolate Communication)
 // =============================================================================
 
