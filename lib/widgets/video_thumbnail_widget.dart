@@ -37,12 +37,18 @@ class _VideoThumbnailWidgetState extends State<VideoThumbnailWidget> {
 
   Future<void> _generateThumbnail() async {
     try {
-      final uint8list = await VideoThumbnail.thumbnailData(
-        video: widget.videoUrl,
-        imageFormat: ImageFormat.JPEG,
-        maxWidth: 120, // Spart extrem RAM und rechenleistung!
-        quality: 25,   // Reicht für ein winziges Vorschaubild völlig
-      );
+      // 🔥 FIX 1: Wir zwingen die asynchrone Funktion in ein Timeout.
+      // Wenn der Server den Frame nicht in 5 Sekunden liefern kann,
+      // brechen wir ab, um RAM und Datenvolumen zu schonen.
+      final uint8list = await Future.microtask(() async {
+        return await VideoThumbnail.thumbnailData(
+          video: widget.videoUrl,
+          imageFormat: ImageFormat.JPEG,
+          maxWidth: 120, 
+          quality: 25,   
+          timeMs: 0, // 🔥 FIX 2: Zwingt das Plugin, EXAKT den 1. Frame zu nehmen!
+        );
+      }).timeout(const Duration(seconds: 5)); 
       
       if (mounted) {
         setState(() {
@@ -54,6 +60,8 @@ class _VideoThumbnailWidgetState extends State<VideoThumbnailWidget> {
         });
       }
     } catch (e) {
+      // Schlägt fehl bei Timeout oder nicht-streambaren MP4s
+      print("⚠️ Video Thumbnail Skipped: $e");
       if (mounted) setState(() => _hasError = true);
     }
   }
