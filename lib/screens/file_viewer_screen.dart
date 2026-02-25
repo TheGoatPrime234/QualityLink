@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../ui/theme_constants.dart';
 import '../ui/global_topbar.dart';
 import 'file_vault.dart'; 
+import '../controllers/file_vault_controller.dart';
 
 class FileViewerScreen extends StatefulWidget {
   final VfsNode node;

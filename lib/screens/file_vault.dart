@@ -1,713 +1,18 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:intl/intl.dart';
-import 'package:path/path.dart' as p;
-import 'package:http/http.dart' as http;
-import 'package:file_picker/file_picker.dart';
-import '../services/data_link_service.dart';
 
-import '../config/server_config.dart';
+import '../controllers/file_vault_controller.dart'; // 🔥 Importiert unsere neue Logik-Datei
 import 'file_viewer_screen.dart';
 import '../ui/theme_constants.dart';
 import '../ui/tech_card.dart';
 import '../ui/parallelogram_button.dart';
 import '../ui/global_topbar.dart';
-import '../ui/scifi_background.dart';
+import '../widgets/video_thumbnail_widget.dart';
 
 // =============================================================================
-// 1. VFS MODEL
+// FRONTEND: FILE VAULT UI
 // =============================================================================
-// 🔥 FIX 1: 'pdf' zur Liste der Typen hinzugefügt
-enum VfsNodeType { folder, drive, image, video, audio, code, archive, document, pdf, unknown }
-enum SortOption { name, date, size, type }
-
-class VfsNode {
-  final String name;
-  final String path;
-  final String deviceId;
-  final String deviceName;
-  final bool isDirectory;
-  final int size;
-  final int modified;
-  final VfsNodeType type;
-  bool isSelected = false;
-  
-  final String? downloadUrl;
-
-  VfsNode({
-    required this.name,
-    required this.path,
-    required this.deviceId,
-    required this.deviceName,
-    required this.isDirectory,
-    this.size = 0,
-    this.modified = 0,
-    this.isSelected = false,
-    this.downloadUrl, 
-  }) : type = _determineType(name, isDirectory, path);
-
-  static VfsNodeType _determineType(String name, bool isDir, String path) {
-    if (path == "ROOT") return VfsNodeType.drive;
-    if (isDir) return VfsNodeType.folder;
-    final ext = p.extension(name).toLowerCase();
-    
-    if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext)) return VfsNodeType.image;
-    if (['.mp4', '.mkv', '.mov', '.avi', '.webm'].contains(ext)) return VfsNodeType.video;
-    if (['.mp3', '.wav', '.flac', '.ogg'].contains(ext)) return VfsNodeType.audio;
-    if (['.zip', '.rar', '.7z', '.tar', '.gz'].contains(ext)) return VfsNodeType.archive;
-    if (['.dart', '.py', '.js', '.json', '.xml', '.html', '.css'].contains(ext)) return VfsNodeType.code;
-    
-    // 🔥 FIX 2: PDF hat jetzt seinen eigenen Typ!
-    if (['.pdf'].contains(ext)) return VfsNodeType.pdf;
-    if (['.doc', '.docx', '.txt', '.md'].contains(ext)) return VfsNodeType.document;
-    
-    return VfsNodeType.unknown;
-  }
-
-  Color get color {
-    if (isSelected) return AppColors.primary;
-    switch (type) {
-      case VfsNodeType.drive: return Colors.white;
-      case VfsNodeType.folder: return AppColors.accent;
-      case VfsNodeType.image: return Colors.purpleAccent;
-      case VfsNodeType.video: return AppColors.warning;
-      case VfsNodeType.code: return const Color(0xFF00FF00);
-      case VfsNodeType.archive: return Colors.orange;
-      case VfsNodeType.audio: return Colors.blueAccent;
-      // 🔥 FIX 3: Eigene Farbe für PDFs (Rot)
-      case VfsNodeType.pdf: return Colors.redAccent; 
-      default: return Colors.grey;
-    }
-  }
-
-  IconData get icon {
-    switch (type) {
-      case VfsNodeType.drive: return Icons.computer;
-      case VfsNodeType.folder: return Icons.folder_open;
-      case VfsNodeType.image: return Icons.image;
-      case VfsNodeType.video: return Icons.movie_filter;
-      case VfsNodeType.audio: return Icons.graphic_eq;
-      case VfsNodeType.code: return Icons.code;
-      case VfsNodeType.archive: return Icons.inventory_2;
-      case VfsNodeType.document: return Icons.description;
-      // 🔥 FIX 4: Eigenes Icon für PDFs
-      case VfsNodeType.pdf: return Icons.picture_as_pdf; 
-      default: return Icons.insert_drive_file;
-    }
-  }
-}
-class FileVaultController extends ChangeNotifier {
-  bool isLoading = false;
-  String? errorMessage;
-  String currentPath = "ROOT";
-  String currentDeviceId = "";
-  String currentDeviceName = "Network";
-  VfsNodeType? activeFilter;
-  String searchQuery = "";
-  bool isSearching = false;
-  bool isDeepSearchActive = false;
-  String myClientId = "";
-  String myDeviceName = "";
-  List<VfsNode> _clipboardNodes = [];
-  bool _isMoveOperation = false;
-  bool showThumbnails = true; 
-  void toggleThumbnails() {
-    showThumbnails = !showThumbnails;
-    notifyListeners();
-  }
-
-  SortOption currentSort = SortOption.name; 
-  bool sortAscending = true;
-  
-  List<VfsNode> files = [];
-  List<Map<String, String>> history = [];
-
-  final String _serverUrl = serverBaseUrl;
-
-  List<VfsNode> get displayFiles {
-    List<VfsNode> results = files;
-
-    if (!isDeepSearchActive && searchQuery.isNotEmpty) {
-      results = files.where((node) => 
-        node.name.toLowerCase().contains(searchQuery.toLowerCase())
-      ).toList();
-    }
-    if (activeFilter != null) {
-      results = results.where((node) => node.type == activeFilter).toList();
-    }
-    results = List.from(results);
-    
-    results.sort((a, b) {
-      int cmp = 0;
-      switch (currentSort) {
-        case SortOption.name:
-          cmp = a.name.toLowerCase().compareTo(b.name.toLowerCase());
-          break;
-        case SortOption.date:
-          cmp = a.modified.compareTo(b.modified);
-          break;
-        case SortOption.size:
-          cmp = a.size.compareTo(b.size);
-          break;
-        case SortOption.type:
-          cmp = a.type.index.compareTo(b.type.index);
-          break;
-      }
-      return sortAscending ? cmp : -cmp;
-    });
-
-    return results;
-  }
-
-  void init(String id, String name) {
-    myClientId = id;
-    myDeviceName = name;
-    loadRoot();
-  }
-
-  void changeSort(SortOption option) {
-    if (currentSort == option) {
-      sortAscending = !sortAscending;
-    } else {
-      currentSort = option;
-      if (option == SortOption.date || option == SortOption.size) {
-        sortAscending = false; 
-      } else {
-        sortAscending = true;
-      }
-    }
-    notifyListeners();
-  }
-
-  void copySelection() {
-    _clipboardNodes = List.from(selectedNodes);
-    _isMoveOperation = false;
-    clearSelection();
-    notifyListeners(); 
-  }
-
-  void cutSelection() {
-    _clipboardNodes = List.from(selectedNodes);
-    _isMoveOperation = true;
-    clearSelection();
-    notifyListeners();
-  }
-
-  bool get canPaste => _clipboardNodes.isNotEmpty;
-
-  Future<void> pasteFiles() async {
-    if (_clipboardNodes.isEmpty) return;
-    String destination = (currentPath == "ROOT" || currentPath == "Drives") 
-        ? "" 
-        : currentPath;
-
-    _setLoading(true);
-    errorMessage = null;
-
-    int successCount = 0;
-    int failCount = 0;
-    final nodesToPaste = List<VfsNode>.from(_clipboardNodes);
-
-    for (var node in nodesToPaste) {
-      try {
-        print("📋 Processing Paste: ${node.name} (${node.deviceId}) -> $currentDeviceId");
-        if (node.deviceId == myClientId && currentDeviceId == myClientId) {
-          await _handleLocalPaste(node, destination);
-          successCount++;
-        }
-        else if (node.deviceId == myClientId && currentDeviceId != myClientId) {
-          print("🚀 PUSHING file to remote: $currentDeviceId");
-          
-          if (node.isDirectory) {
-             // Ordner senden (als ZIP)
-             await DataLinkService().sendFolder(
-               Directory(node.path), 
-               [currentDeviceId],
-             );
-          } else {
-             await DataLinkService().sendFile(
-               File(node.path), 
-               [currentDeviceId], 
-               destinationPath: destination
-             );
-          }
-          successCount++;
-        }
-        else if (node.deviceId != myClientId && currentDeviceId == myClientId) {
-           print("⬇️ PULLING file from remote: ${node.deviceId}");
-           await _sendCommandToRelay("request_transfer", {
-             "path": node.path,
-             "requester_id": myClientId,
-             "destination_path": destination 
-           });
-           successCount++;
-        }
-        else {
-           print("⚠️ Remote-to-Remote copy not supported yet.");
-           failCount++;
-        }
-
-      } catch (e) {
-        print("❌ Paste Error for ${node.name}: $e");
-        failCount++;
-      }
-    }
-
-    if (_isMoveOperation) {
-      _clipboardNodes.clear();
-    } else {
-    }
-    if (failCount > 0) {
-      errorMessage = "Success: $successCount, Failed: $failCount";
-    } else {
-      errorMessage = "Transfer started for $successCount items";
-      Future.delayed(const Duration(seconds: 2), () => errorMessage = null);
-    }
-
-    _setLoading(false);
-    await Future.delayed(const Duration(seconds: 1));
-    _loadRemotePath(currentDeviceId, currentPath);
-  }
-
-  Future<void> _handleLocalPaste(VfsNode node, String destination) async {
-    final sourceFile = File(node.path);
-    final sourceDir = Directory(node.path);
-    final fileName = p.basename(node.path);
-    String destPath = p.join(destination.isEmpty ? Directory.current.path : destination, fileName);
-
-    if (await File(destPath).exists() || await Directory(destPath).exists()) {
-       final name = p.basenameWithoutExtension(fileName);
-       final ext = p.extension(fileName);
-       destPath = p.join(p.dirname(destPath), "${name}_copy$ext");
-    }
-
-    if (_isMoveOperation) {
-       if (await sourceFile.exists()) await sourceFile.rename(destPath);
-       else if (await sourceDir.exists()) await sourceDir.rename(destPath);
-    } else {
-       if (await sourceFile.exists()) await sourceFile.copy(destPath);
-       else if (await sourceDir.exists()) {
-         print("Local folder copy not fully implemented, use Move instead.");
-       }
-    }
-  }
-
-  Future<void> downloadSelection() async {
-    if (selectedNodes.isEmpty) return;
-    _setLoading(true);
-
-    int count = 0;
-    for (var node in selectedNodes) {
-      
-      try {
-        if (node.deviceId == myClientId) {
-           print("File is already local.");
-        } else {
-           await _sendCommandToRelay("request_transfer", {
-             "path": node.path,
-             "requester_id": myClientId 
-           });
-           count++;
-        }
-      } catch (e) {
-        errorMessage = "Download Request Failed: $e";
-      }
-    }
-    
-    clearSelection();
-    _setLoading(false);
-    
-    if (count > 0) {
-      errorMessage = "REQUESTED $count ITEMS via DATALINK";
-      Future.delayed(const Duration(seconds: 2), () => errorMessage = null);
-    }
-    
-    clearSelection();
-    _setLoading(false);
-    
-    if (count > 0) {
-      errorMessage = "REQUESTED $count DOWNLOADS via DATALINK";
-      Future.delayed(const Duration(seconds: 2), () => errorMessage = null);
-    }
-  }
-  Future<void> uploadFile() async {
-    if (currentDeviceId.isEmpty || currentDeviceId == myClientId) {
-      errorMessage = "SELECT A REMOTE FOLDER FIRST";
-      return;
-    }
-
-    try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(allowMultiple: true);
-
-      if (result != null) {
-        _setLoading(true);
-        List<File> files = result.paths.map((path) => File(path!)).toList();
-        String destination = (currentPath == "ROOT" || currentPath == "Drives") 
-            ? "" 
-            : currentPath;
-
-        print("🚀 Uploading ${files.length} files to $currentDeviceId at $destination");
-        await DataLinkService().sendFiles(
-          files, 
-          [currentDeviceId], 
-          destinationPath: destination 
-        );
-        
-        _setLoading(false);
-        Future.delayed(const Duration(seconds: 2), () => _loadRemotePath(currentDeviceId, currentPath));
-      }
-    } catch (e) {
-      _setLoading(false);
-      errorMessage = "Upload Failed: $e";
-    }
-  }
-  void setFilter(VfsNodeType type) {
-    if (activeFilter == type) {
-      activeFilter = null; 
-    } else {
-      activeFilter = type; 
-    }
-    notifyListeners();
-  }
-
-  Future<void> loadRoot() async {
-    _setLoading(true);
-    errorMessage = null;
-    searchQuery = "";
-    isSearching = false;
-    currentPath = "ROOT";
-    currentDeviceId = "";
-    currentDeviceName = "Network";
-    files.clear();
-    history.clear();
-
-    try {
-      print("📡 Fetching devices from $_serverUrl/storage/devices");
-      final response = await http.get(Uri.parse('$_serverUrl/storage/devices'));
-      
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final devices = List<dynamic>.from(data['devices'] ?? []);
-        
-        files = devices.map((d) => VfsNode(
-          name: d['name'],
-          path: "ROOT", 
-          deviceId: d['client_id'],
-          deviceName: d['name'],
-          isDirectory: true,
-        )).toList();
-      } else {
-        errorMessage = "Server Error: ${response.statusCode}";
-      }
-    } catch (e) {
-      print("❌ Error loading root: $e");
-      errorMessage = "Connection Failed: $e";
-    } finally {
-      _setLoading(false);
-    }
-  }
-
-  void updateSearchQuery(String query) {
-    searchQuery = query;
-    notifyListeners();
-  }
-
-  Future<void> open(VfsNode node) async {
-    if (!node.isDirectory) return;
-
-    history.add({
-      'path': currentPath, 
-      'deviceId': currentDeviceId, 
-      'name': currentDeviceName
-    });
-
-    if (currentPath == "ROOT") {
-      currentDeviceId = node.deviceId;
-      currentDeviceName = node.deviceName;
-      await _loadRemotePath(node.deviceId, null);
-    } else {
-      await _loadRemotePath(currentDeviceId, node.path);
-    }
-  }
-
-  Future<void> performDeepSearch(String query) async {
-    if (query.isEmpty) return;
-    
-    _setLoading(true);
-    isDeepSearchActive = true; 
-    searchQuery = query; 
-    files.clear(); 
-    errorMessage = null;
-
-    try {
-      String searchUrl;
-      if (currentDeviceId.isEmpty || currentPath == "ROOT" || currentPath == "Drives") {
-         print("🌍 GLOBAL SEARCH via $_serverUrl");
-         searchUrl = '$_serverUrl/files/search?query=${Uri.encodeComponent(query)}';
-      } 
-      else {
-        final devResponse = await http.get(Uri.parse('$_serverUrl/storage/devices'));
-        final devData = json.decode(devResponse.body);
-        final device = (devData['devices'] as List).firstWhere(
-          (d) => d['client_id'] == currentDeviceId, orElse: () => null
-        );
-
-        if (device == null) throw Exception("Device not found");
-        
-        final ip = device['ip'];
-        final port = device['file_server_port'];
-        String searchRoot = currentPath;
-        
-        searchUrl = 'http://$ip:$port/files/search?query=${Uri.encodeComponent(query)}&path=${Uri.encodeComponent(searchRoot)}';
-      }
-
-      print("🔎 SEARCH CALL: $searchUrl");
-      
-      final response = await http.get(Uri.parse(searchUrl)).timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          final rawFiles = List<dynamic>.from(data['files']);
-          
-          files = rawFiles.map((f) {
-            final sourceDevice = f['device_id'] ?? currentDeviceId;
-            
-            return VfsNode(
-              name: f['name'],
-              path: f['path'],
-              deviceId: sourceDevice, 
-              deviceName: sourceDevice == currentDeviceId ? currentDeviceName : (sourceDevice == "SERVER" ? "QualityLink Core" : sourceDevice),
-              isDirectory: f['is_directory'],
-              size: f['size'] ?? 0,
-              modified: f['modified'] ?? 0,
-            );
-          }).toList();
-      } else {
-         errorMessage = "Search failed: ${response.statusCode}";
-      }
-
-    } catch (e) {
-      errorMessage = "Search Error: $e";
-    } finally {
-      _setLoading(false);
-    }
-  }
-
-  void toggleSearch() {
-    isSearching = !isSearching;
-    if (!isSearching) {
-      searchQuery = "";
-      activeFilter = null; 
-      isDeepSearchActive = false;
-      
-      if (currentPath == "ROOT") {
-          loadRoot();
-      } else if (currentPath == "Drives") {
-          _loadRemotePath(currentDeviceId, null); 
-      } else {
-          _loadRemotePath(currentDeviceId, currentPath);
-      }
-    }
-    notifyListeners();
-  }
-  
-  Future<void> _sendCommandToRelay(String action, Map<String, dynamic> params) async {
-    if (currentDeviceId.isEmpty) return;
-    
-    final bodyData = json.encode({
-      "sender_id": "MASTER_CONTROL", 
-      "target_id": currentDeviceId,  
-      "action": action,
-      "params": params
-    });
-
-    print("🚀 Sending Relay Command: $action to $currentDeviceId");
-
-    final response = await http.post(
-      Uri.parse('$_serverUrl/storage/remote/command'),
-      headers: {"Content-Type": "application/json"},
-      body: bodyData,
-    ).timeout(const Duration(seconds: 5));
-
-    if (response.statusCode != 200) {
-      throw Exception("Server Relay Error: ${response.statusCode}");
-    }
-  }
-
-  Future<void> deleteNodes() async {
-    if (selectedNodes.isEmpty) return;
-    _setLoading(true);
-
-    final pathAtDeletion = currentPath;
-    
-    for (var node in selectedNodes) {
-      try {
-        await _sendCommandToRelay("delete", {
-          "path": node.path
-        });
-      } catch (e) {
-        print("❌ Delete Error: $e");
-        errorMessage = "Delete Failed: $e";
-      }
-    }
-
-    clearSelection();
-
-    await Future.delayed(const Duration(milliseconds: 600)); 
-
-    if (currentPath != pathAtDeletion) {
-       _setLoading(false);
-       return;
-    }
-    
-    if (currentPath == "ROOT" || currentPath == "Drives") {
-        loadRoot();
-    } else {
-        _loadRemotePath(currentDeviceId, currentPath);
-    }
-  }
-
-  Future<void> renameNode(VfsNode node, String newName) async {
-    _setLoading(true);
-    final pathAtRename = currentPath; 
-    
-    try {
-      await _sendCommandToRelay("rename", {
-        "path": node.path,
-        "new_name": newName
-      });
-      await Future.delayed(const Duration(milliseconds: 500));
-      
-      if (currentPath == pathAtRename) {
-         _loadRemotePath(currentDeviceId, currentPath);
-      } else {
-         _setLoading(false);
-      }
-    } catch (e) {
-      errorMessage = "Rename failed: $e";
-      _setLoading(false);
-    }
-  }
-
-  Future<void> _loadRemotePath(String deviceId, String? path) async {
-    searchQuery = "";
-    isSearching = false;
-    
-    _setLoading(true);
-    errorMessage = null;
-    try {
-      final devResponse = await http.get(Uri.parse('$_serverUrl/storage/devices'));
-      final devData = json.decode(devResponse.body);
-      final device = (devData['devices'] as List).firstWhere(
-        (d) => d['client_id'] == deviceId, orElse: () => null
-      );
-
-      if (device != null) {
-        final ip = device['ip'];
-        final port = device['file_server_port'];
-        
-        String url;
-        
-        if (path == null || path == "ROOT" || path == "Drives") {
-           url = 'http://$ip:$port/files/paths';
-           currentPath = "Drives";
-        } else {
-           url = 'http://$ip:$port/files/list?path=${Uri.encodeComponent(path)}';
-           currentPath = path;
-        }
-
-        print("📡 Calling Remote: $url");
-        
-        final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
-        
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          if (currentPath == "Drives" && data.containsKey('paths')) {
-            final paths = List<String>.from(data['paths']);
-            files = paths.map((p) => VfsNode(
-              name: p,
-              path: p,
-              deviceId: deviceId,
-              deviceName: device['name'],
-              isDirectory: true,
-            )).toList();
-          } 
-          else {
-            final rawFiles = List<dynamic>.from(data['files']);
-            files = rawFiles.map((f) => VfsNode(
-              name: f['name'],
-              path: f['path'],
-              deviceId: deviceId,
-              deviceName: device['name'],
-              isDirectory: f['is_directory'],
-              size: f['size'] ?? 0,
-              modified: f['modified'] ?? 0,
-              downloadUrl: 'http://$ip:$port/files/download?path=${Uri.encodeComponent(f['path'])}',
-            )).toList();
-          }
-        } else {
-           errorMessage = "Remote Device Error: ${response.statusCode}";
-        }
-      } else {
-        errorMessage = "Device offline or not found.";
-      }
-    } catch (e) {
-      print("❌ Error loading remote: $e");
-      errorMessage = "Remote connection failed: $e";
-    } finally {
-      _setLoading(false);
-    }
-  }
-
-  bool handleBackPress() {
-    if (isSelectionMode) {
-      clearSelection();
-      return false; 
-    }
-    if (history.isNotEmpty) {
-      navigateUp();
-      return false; 
-    }
-    return true; 
-  }
-
-  void navigateUp() {
-    if (history.isEmpty) return;
-    final last = history.removeLast();
-    
-    if (last['path'] == "ROOT") {
-      loadRoot();
-    } else {
-      currentDeviceId = last['deviceId']!;
-      currentDeviceName = last['name']!;
-      _loadRemotePath(currentDeviceId, last['path'] == "Drives" ? null : last['path']);
-    }
-  }
-
-  bool get isSelectionMode => files.any((f) => f.isSelected);
-  List<VfsNode> get selectedNodes => files.where((f) => f.isSelected).toList();
-
-  void toggleSelection(VfsNode node) {
-    node.isSelected = !node.isSelected;
-    notifyListeners();
-  }
-
-  void clearSelection() {
-    for (var f in files) f.isSelected = false;
-    notifyListeners();
-  }
-
-  void _setLoading(bool val) {
-    isLoading = val;
-    notifyListeners();
-  }
-}
 
 class NetworkStorageScreen extends StatelessWidget {
   final String myClientId;
@@ -809,12 +114,12 @@ class _FileVaultView extends StatelessWidget {
       ),
     );
   }
-  Widget _buildHeader(BuildContext context, FileVaultController controller) {
+
+Widget _buildHeader(BuildContext context, FileVaultController controller) {
     if (controller.isSearching) {
       return _buildSearchBar(context, controller);
     }
 
-    // Breadcrumbs bauen
     List<Widget> breadcrumbs = [];
     breadcrumbs.add(
       Padding(
@@ -1027,11 +332,7 @@ class _FileVaultView extends StatelessWidget {
                         const SizedBox(width: 6),
                         Text(
                           f['label'] as String,
-                          style: TextStyle(
-                            color: color, 
-                            fontWeight: FontWeight.bold, 
-                            fontSize: 12
-                          ),
+                          style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12),
                         ),
                       ],
                     ),
@@ -1049,9 +350,7 @@ class _FileVaultView extends StatelessWidget {
               "${controller.displayFiles.length} NODES FOUND",
               style: TextStyle(
                 color: controller.activeFilter != null ? AppColors.accent : AppColors.primary, 
-                fontSize: 10, 
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.5
+                fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.5
               ),
             ),
           ),
@@ -1059,7 +358,8 @@ class _FileVaultView extends StatelessWidget {
       ),
     );
   }
-  Widget _buildFileItem(BuildContext context, FileVaultController controller, VfsNode node) {
+
+Widget _buildFileItem(BuildContext context, FileVaultController controller, VfsNode node) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: TechCard(
@@ -1076,7 +376,6 @@ class _FileVaultView extends StatelessWidget {
             if (node.isDirectory) {
               controller.open(node);
             } else {
-              // 🔥 FIX: Öffnet nun den brandneuen Viewer!
               Navigator.push(
                 context, 
                 MaterialPageRoute(builder: (_) => FileViewerScreen(node: node))
@@ -1095,16 +394,18 @@ class _FileVaultView extends StatelessWidget {
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(color: node.color.withValues(alpha: 0.3)),
               ),
-              child: (node.type == VfsNodeType.image && node.downloadUrl != null && controller.showThumbnails)
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(3),
-                      child: Image.network(
-                        node.downloadUrl!,
-                        fit: BoxFit.cover,
-                        cacheWidth: 120, 
-                        errorBuilder: (ctx, err, stack) => Icon(node.icon, color: node.color, size: 20),
-                      ),
-                    )
+              child: controller.showThumbnails 
+                  ? (node.type == VfsNodeType.image && node.downloadUrl != null)
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(3),
+                          child: Image.network(
+                            node.downloadUrl!, fit: BoxFit.cover, cacheWidth: 120,
+                            errorBuilder: (ctx, err, stack) => Icon(node.icon, color: node.color, size: 20),
+                          ),
+                        )
+                      : (node.type == VfsNodeType.video && node.downloadUrl != null)
+                          ? VideoThumbnailWidget(videoUrl: node.downloadUrl!, fallbackIcon: node.icon, color: node.color)
+                          : Icon(node.icon, color: node.color, size: 20)
                   : Icon(node.icon, color: node.color, size: 20),
             ),
             const SizedBox(width: 16),
@@ -1116,18 +417,15 @@ class _FileVaultView extends StatelessWidget {
                     node.name,
                     style: GoogleFonts.rajdhani(
                       color: node.isSelected ? AppColors.primary : Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
+                      fontSize: 16, fontWeight: FontWeight.w600,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
                   ),
                   if (controller.isDeepSearchActive)
                     Text(
                       "PATH: ${node.path}", 
                       style: const TextStyle(color: AppColors.accent, fontSize: 10),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
                     )
                   else if (node.type != VfsNodeType.folder && node.type != VfsNodeType.drive)
                     Text(
@@ -1138,10 +436,7 @@ class _FileVaultView extends StatelessWidget {
               ),
             ),
             if (controller.isSelectionMode)
-              Icon(
-                node.isSelected ? Icons.check_box : Icons.check_box_outline_blank,
-                color: node.isSelected ? AppColors.primary : Colors.grey,
-              )
+              Icon(node.isSelected ? Icons.check_box : Icons.check_box_outline_blank, color: node.isSelected ? AppColors.primary : Colors.grey)
             else if (node.isDirectory)
               const Icon(Icons.chevron_right, color: Colors.grey),
           ],
@@ -1157,18 +452,13 @@ class _FileVaultView extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            _buildActionButton(Icons.close, "CLEAR CLIPBOARD", () {
-               controller._clipboardNodes.clear(); 
-               controller.notifyListeners();
-            }, isDanger: true),
-            
+            _buildActionButton(Icons.close, "CLEAR CLIPBOARD", () => controller.copySelection(), isDanger: true),
             _buildActionButton(Icons.content_paste, "PASTE HERE", () => controller.pasteFiles()),
           ],
         ),
       );
     }
 
-    // Normaler Selection Mode
     return TechCard(
       borderColor: AppColors.primary,
       child: Row(
@@ -1194,14 +484,7 @@ class _FileVaultView extends StatelessWidget {
           children: [
             Icon(icon, color: isDanger ? AppColors.warning : Colors.white),
             const SizedBox(height: 4),
-            Text(
-              label, 
-              style: TextStyle(
-                color: isDanger ? AppColors.warning : Colors.white, 
-                fontSize: 10, 
-                fontWeight: FontWeight.bold
-              )
-            ),
+            Text(label, style: TextStyle(color: isDanger ? AppColors.warning : Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
           ],
         ),
       ),
@@ -1223,14 +506,7 @@ class _FileVaultView extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              "SORT SYSTEM NODES", 
-              style: TextStyle(
-                color: AppColors.primary, 
-                fontWeight: FontWeight.bold, 
-                letterSpacing: 2
-              )
-            ),
+            const Text("SORT SYSTEM NODES", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, letterSpacing: 2)),
             const SizedBox(height: 20),
             _buildSortOption(ctx, controller, "NAME (A-Z)", SortOption.name, Icons.sort_by_alpha),
             _buildSortOption(ctx, controller, "DATE (TIME)", SortOption.date, Icons.calendar_today),
@@ -1248,9 +524,7 @@ class _FileVaultView extends StatelessWidget {
     return ListTile(
       leading: Icon(icon, color: isSelected ? AppColors.accent : Colors.grey),
       title: Text(label, style: TextStyle(color: isSelected ? Colors.white : Colors.grey, fontFamily: 'Rajdhani', fontWeight: FontWeight.bold)),
-      trailing: isSelected 
-        ? Icon(ctrl.sortAscending ? Icons.arrow_upward : Icons.arrow_downward, color: AppColors.accent)
-        : null,
+      trailing: isSelected ? Icon(ctrl.sortAscending ? Icons.arrow_upward : Icons.arrow_downward, color: AppColors.accent) : null,
       onTap: () {
         ctrl.changeSort(opt);
         Navigator.pop(ctx);
