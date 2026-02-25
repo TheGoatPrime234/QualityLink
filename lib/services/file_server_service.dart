@@ -524,9 +524,14 @@ class FileServerService {
     try {
       request.response.headers.add("Content-Type", "application/octet-stream");
       request.response.headers.add("Content-Length", file.lengthSync());
+      
+      // 🔥 FIX: Dateinamen URL-encodieren, damit Umlaute (ä, ö, ü, ß) 
+      // und Leerzeichen den HTTP-Header nicht zum Absturz bringen!
+      final safeName = Uri.encodeComponent(p.basename(file.path));
+      
       request.response.headers.add(
         "Content-Disposition",
-        'attachment; filename="${p.basename(file.path)}"'
+        'attachment; filename="$safeName"'
       );
 
       await file.openRead().pipe(request.response);
