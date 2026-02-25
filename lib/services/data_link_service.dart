@@ -29,6 +29,7 @@ class DataLinkService {
   String _clientId = "";
   String _myLocalIp = "0.0.0.0";
   String _downloadPath = "";
+  String _deviceName = "";
   int _activeTasksCount = 0;
   
   HttpServer? _localServer;
@@ -68,11 +69,13 @@ class DataLinkService {
 
   Future<void> start({
     required String clientId,
+    required String deviceName,
     required String localIp,
   }) async {
     if (_isRunning) return;
 
     _clientId = clientId;
+    _deviceName = deviceName; // 🔥 NEU
     _myLocalIp = localIp;
 
     print("🚀 Starting DataLinkService v4 (Fast Boot) for: $_clientId");
@@ -112,18 +115,15 @@ class DataLinkService {
 
   Future<void> _sendHeartbeat() async {
     try {
-      // 🔥 FIX: Wir nutzen hier absichtlich NICHT den _httpClient!
-      // Der globale _httpClient bleibt als Dauerleitung (Keep-Alive) für Dateien offen.
-      // Der Heartbeat nutzt einen einmaligen Standard-http-Aufruf, der sofort wieder schließt.
       await http.post(
         Uri.parse('$serverBaseUrl/heartbeat'),
         headers: {
           "Content-Type": "application/json",
-          "Connection": "close", // Schließt nur DIESE kleine Verbindung, nicht den _httpClient-Tunnel!
+          "Connection": "close", 
         },
         body: json.encode({
           "client_id": _clientId,
-          "client_name": Platform.localHostname, 
+          "client_name": _deviceName, // 🔥 FIX: Hier echten Namen nutzen!
           "device_type": Platform.isAndroid || Platform.isIOS ? "mobile" : "desktop",
           "local_ip": _myLocalIp,
           "file_server_port": _localServer?.port ?? 0, 

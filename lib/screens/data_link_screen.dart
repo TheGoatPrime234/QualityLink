@@ -104,6 +104,7 @@ Future<void> _initializeServices() async {
 
     await _datalink.start(
       clientId: widget.clientId,
+      deviceName: widget.deviceName, // 🔥 FIX: Namen übergeben
       localIp: _heartbeat.localIp,
     );
 
