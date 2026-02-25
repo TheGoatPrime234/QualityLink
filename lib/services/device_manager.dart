@@ -120,6 +120,17 @@ class DeviceManager extends ChangeNotifier {
       }
     } catch (e) {
       // Bei Verbindungsabbruch alten Cache behalten, kein Absturz!
+      if (_devices.isNotEmpty) {
+        _devices = _devices.map((d) => NetworkDevice(
+          id: d.id, name: d.name, type: d.type, ip: d.ip,
+          isOnline: false, // <-- Setzt alle auf Rot/Offline
+          isSameLan: d.isSameLan, fileServerPort: d.fileServerPort,
+          lastSeenAgo: d.lastSeenAgo, transfersSent: d.transfersSent,
+          transfersReceived: d.transfersReceived, clipboardEntries: d.clipboardEntries,
+        )).toList();
+        
+        notifyListeners(); // UI updaten!
+      }
     }
   }
 

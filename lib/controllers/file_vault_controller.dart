@@ -9,6 +9,7 @@ import 'package:file_picker/file_picker.dart';
 import '../services/data_link_service.dart';
 import '../config/server_config.dart';
 import '../ui/theme_constants.dart';
+import '../services/device_manager.dart';
 
 // =============================================================================
 // 1. VFS MODEL & ENUMS
@@ -324,18 +325,14 @@ Future<void> uploadFile() async {
     history.clear();
 
     try {
-      final response = await http.get(Uri.parse('$_serverUrl/storage/devices'));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final devices = List<dynamic>.from(data['devices'] ?? []);
-        files = devices.map((d) => VfsNode(
-          name: d['name'], path: "ROOT", deviceId: d['client_id'], deviceName: d['name'], isDirectory: true,
-        )).toList();
-      } else {
-        errorMessage = "Server Error: ${response.statusCode}";
-      }
+      // 🔥 PHASE 2: Kein Warten auf Server-Antwort! Sofort aus dem RAM laden.
+      final devices = DeviceManager().onlineDevices;
+
+      files = devices.map((d) => VfsNode(
+        name: d.name, path: "ROOT", deviceId: d.id, deviceName: d.name, isDirectory: true,
+      )).toList();
     } catch (e) {
-      errorMessage = "Connection Failed: $e";
+      errorMessage = "Error loading devices: $e";
     } finally {
       _setLoading(false);
     }
@@ -367,10 +364,11 @@ Future<void> uploadFile() async {
       if (currentDeviceId.isEmpty || currentPath == "ROOT" || currentPath == "Drives") {
          searchUrl = '$_serverUrl/files/search?query=${Uri.encodeComponent(query)}';
       } else {
-        final devResponse = await http.get(Uri.parse('$_serverUrl/storage/devices'));
-        final device = (json.decode(devResponse.body)['devices'] as List).firstWhere((d) => d['client_id'] == currentDeviceId, orElse: () => null);
-        if (device == null) throw Exception("Device not found");
-        searchUrl = 'http://${device['ip']}:${device['file_server_port']}/files/search?query=${Uri.encodeComponent(query)}&path=${Uri.encodeComponent(currentPath)}';
+        // 🔥 PHASE 2: Auch die Suche nutzt sofort den RAM-Manager!
+        final device = DeviceManager().getDeviceById(currentDeviceId);
+        if (device == null || !device.isOnline) throw Exception("Device not found or offline");
+
+        searchUrl = 'http://${device.ip}:${device.fileServerPort}/files/search?query=${Uri.encodeComponent(query)}&path=${Uri.encodeComponent(currentPath)}';
       }
 
       final response = await http.get(Uri.parse(searchUrl)).timeout(const Duration(seconds: 10));
@@ -463,12 +461,12 @@ Future<void> uploadFile() async {
     }
 
     try {
-      final devResponse = await http.get(Uri.parse('$_serverUrl/storage/devices'));
-      final device = (json.decode(devResponse.body)['devices'] as List).firstWhere((d) => d['client_id'] == deviceId, orElse: () => null);
+      // 🔥 PHASE 2: Gerät sofort aus dem Manager holen!
+      final device = DeviceManager().getDeviceById(deviceId);
 
-      if (device != null) {
-        final ip = device['ip'];
-        final port = device['file_server_port'];
+      if (device != null && device.isOnline) {
+        final ip = device.ip;
+        final port = device.fileServerPort;
         String url = (path == null || path == "ROOT" || path == "Drives") 
             ? 'http://$ip:$port/files/paths' 
             : 'http://$ip:$port/files/list?path=${Uri.encodeComponent(path)}';
@@ -483,11 +481,11 @@ Future<void> uploadFile() async {
           
           if (currentPath == "Drives" && data.containsKey('paths')) {
             newFiles = (data['paths'] as List).map((p) => VfsNode(
-              name: p, path: p, deviceId: deviceId, deviceName: device['name'], isDirectory: true,
+              name: p, path: p, deviceId: deviceId, deviceName: device.name, isDirectory: true,
             )).toList();
           } else {
             newFiles = (data['files'] as List).map((f) => VfsNode(
-              name: f['name'], path: f['path'], deviceId: deviceId, deviceName: device['name'],
+              name: f['name'], path: f['path'], deviceId: deviceId, deviceName: device.name,
               isDirectory: f['is_directory'], size: f['size'] ?? 0, modified: f['modified'] ?? 0,
               downloadUrl: 'http://$ip:$port/files/download?path=${Uri.encodeComponent(f['path'])}',
             )).toList();

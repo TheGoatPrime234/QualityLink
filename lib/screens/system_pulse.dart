@@ -9,6 +9,7 @@ import '../services/heartbeat_service.dart';
 import '../services/data_link_service.dart';
 import '../ui/global_topbar.dart';
 import '../ui/theme_constants.dart';
+import '../services/device_manager.dart';
 
 // =============================================================================
 // SYSTEM MONITOR SCREEN - MODULE 2 (Enhanced with HeartbeatService Debug Info)
@@ -37,11 +38,6 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
   Map<String, dynamic>? _storageInfo;
   Timer? _storageTimer;
   
-  // Active Devices
-  List<dynamic> _activeDevices = [];
-  int _totalDevices = 0;
-  int _onlineDevices = 0;
-  
   // ✅ Heartbeat Debug Info
   Map<String, dynamic> _heartbeatDebugInfo = {};
   
@@ -52,14 +48,16 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
   @override
   void initState() {
     super.initState();
+    // Auf Änderungen des Managers hören:
+    DeviceManager().addListener(() {
+      if (mounted) setState(() {}); 
+    });
     _startLogStream();
     _fetchStorageInfo();
     _storageTimer = Timer.periodic(const Duration(seconds: 5), (t) {
       _fetchStorageInfo();
-      _fetchActiveDevices();
       _updateHeartbeatInfo();
     });
-    _fetchActiveDevices();
     _updateHeartbeatInfo();
   }
 
@@ -127,22 +125,6 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
       if (response.statusCode == 200 && mounted) {
         setState(() {
           _storageInfo = json.decode(response.body);
-        });
-      }
-    } catch (e) {
-      // Silently fail
-    }
-  }
-
-  Future<void> _fetchActiveDevices() async {
-    try {
-      final response = await http.get(Uri.parse('$serverBaseUrl/admin/devices'));
-      if (response.statusCode == 200 && mounted) {
-        final data = json.decode(response.body);
-        setState(() {
-          _activeDevices = data['devices'];
-          _totalDevices = data['total_devices'];
-          _onlineDevices = data['online_devices'];
         });
       }
     } catch (e) {
@@ -236,7 +218,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
       
       if (response.statusCode == 200 && mounted) {
         _showSnackBar("✅ $deviceName kicked from server", isError: false);
-        _fetchActiveDevices();
+        DeviceManager().refresh();
       }
     } catch (e) {
       _showSnackBar("❌ Failed to kick device: $e", isError: true);
@@ -252,15 +234,12 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
   // ✅ Admin Panel Auto-Refresh Management
   void _startAdminPanelRefresh() {
     print("🔄 Starting Admin Panel auto-refresh");
-    
-    _fetchActiveDevices();
     _fetchStorageInfo();
     _updateHeartbeatInfo();
     
     _adminPanelTimer?.cancel();
     _adminPanelTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
       if (_isAdminPanelOpen && mounted) {
-        _fetchActiveDevices();
         _fetchStorageInfo();
         _updateHeartbeatInfo();
       } else {
@@ -279,7 +258,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
   // FORTSETZUNG IN TEIL 2...
 // FORTSETZUNG VON TEIL 1...
 
-  void _showDeviceDetails(Map<String, dynamic> device) {
+  void _showDeviceDetails(NetworkDevice device) { // 🔥 FIX: Signatur geändert
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -287,14 +266,14 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
         title: Row(
           children: [
             Icon(
-              _getDeviceIcon(device['type']),
-              color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
+              _getDeviceIcon(device.type), // 🔥 FIX: device.type
+              color: device.isOnline ? const Color(0xFF00FF41) : Colors.grey, // 🔥 FIX: device.isOnline
               size: 24,
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                device['name'],
+                device.name,
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
@@ -304,15 +283,15 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildDetailRow("Status", device['online'] ? "🟢 Online" : "🔴 Offline"),
-            _buildDetailRow("Type", device['type']),
-            _buildDetailRow("IP Address", device['ip']),
-            _buildDetailRow("Client ID", device['client_id']),
-            _buildDetailRow("Last Seen", "${device['last_seen_ago']}s ago"),
+            _buildDetailRow("Status", device.isOnline ? "🟢 Online" : "🔴 Offline"),
+            _buildDetailRow("Type", device.type),
+            _buildDetailRow("IP Address", device.ip),
+            _buildDetailRow("Client ID", device.id),
+            _buildDetailRow("Last Seen", "${device.lastSeenAgo}s ago"),
             const Divider(color: Colors.grey),
-            _buildDetailRow("Transfers Sent", "${device['transfers_sent']}", color: Colors.orange),
-            _buildDetailRow("Transfers Received", "${device['transfers_received']}", color: const Color(0xFF00E5FF)),
-            _buildDetailRow("Clipboard Entries", "${device['clipboard_entries']}", color: Colors.purple),
+            _buildDetailRow("Transfers Sent", "${device.transfersSent}", color: Colors.orange),
+            _buildDetailRow("Transfers Received", "${device.transfersReceived}", color: const Color(0xFF00E5FF)),
+            _buildDetailRow("Clipboard Entries", "${device.clipboardEntries}", color: Colors.purple),
           ],
         ),
         actions: [
@@ -323,7 +302,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
           ElevatedButton.icon(
             onPressed: () {
               Navigator.pop(context);
-              _kickDevice(device['client_id'], device['name']);
+              _kickDevice(device.id, device.name); // 🔥 FIX: device.id
             },
             icon: const Icon(Icons.logout, size: 16),
             label: const Text("Kick"),
@@ -660,7 +639,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
-                              "$_onlineDevices / $_totalDevices online",
+                              "${DeviceManager().activeDevicesCount} / ${DeviceManager().totalDevices} online", // 🔥 FIX
                               style: const TextStyle(
                                 color: Color(0xFF00FF41),
                                 fontSize: 11,
@@ -671,7 +650,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      if (_activeDevices.isEmpty)
+                      if (DeviceManager().devices.isEmpty)
                         const Padding(
                           padding: EdgeInsets.all(16),
                           child: Center(
@@ -682,7 +661,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
                           ),
                         )
                       else
-                        ..._activeDevices.map((device) => _buildDeviceCard(device)),
+                        ...DeviceManager().devices.map((device) => _buildDeviceCard(device)),
                     ],
                   ),
                 ),
@@ -752,7 +731,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
     });
   }
 
-  Widget _buildDeviceCard(Map<String, dynamic> device) {
+  Widget _buildDeviceCard(NetworkDevice device) { // 🔥 FIX: Signatur geändert
     return GestureDetector(
       onTap: () => _showDeviceDetails(device),
       child: Container(
@@ -762,7 +741,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
           color: const Color(0xFF0F0F0F),
           border: Border(
             left: BorderSide(
-              color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
+              color: device.isOnline ? const Color(0xFF00FF41) : Colors.grey,
               width: 3,
             ),
           ),
@@ -774,8 +753,8 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
         child: Row(
           children: [
             Icon(
-              _getDeviceIcon(device['type']),
-              color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
+              _getDeviceIcon(device.type), // 🔥 FIX: device.type
+              color: device.isOnline ? const Color(0xFF00FF41) : Colors.grey,
               size: 20,
             ),
             const SizedBox(width: 12),
@@ -784,7 +763,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    device['name'],
+                    device.name,
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -792,7 +771,7 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
                     ),
                   ),
                   Text(
-                    "${device['ip']} • ${device['type']}",
+                    "${device.ip} • ${device.type}", // 🔥 FIX
                     style: const TextStyle(color: Colors.grey, fontSize: 10),
                   ),
                 ],
@@ -802,15 +781,15 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  device['online'] ? "ONLINE" : "OFFLINE",
+                  device.isOnline ? "ONLINE" : "OFFLINE", // 🔥 FIX
                   style: TextStyle(
-                    color: device['online'] ? const Color(0xFF00FF41) : Colors.grey,
+                    color: device.isOnline ? const Color(0xFF00FF41) : Colors.grey,
                     fontSize: 9,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
                 Text(
-                  "↑${device['transfers_sent']} ↓${device['transfers_received']}",
+                  "↑${device.transfersSent} ↓${device.transfersReceived}", // 🔥 FIX
                   style: const TextStyle(color: Colors.grey, fontSize: 9),
                 ),
               ],

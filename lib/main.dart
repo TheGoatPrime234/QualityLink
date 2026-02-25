@@ -21,6 +21,7 @@ import 'services/data_link_service.dart';
 import 'services/heartbeat_service.dart';
 import 'config/server_config.dart';
 import 'services/device_manager.dart';
+import 'services/device_manager.dart';
 
 import 'ui/theme_constants.dart';
 import 'layout/responsive_shell.dart';
@@ -139,64 +140,53 @@ class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingOb
     print("📁 ${sharedData.length} DATEIEN EMPFANGEN!");
     
     // Bottom Sheet öffnen, um das Ziel-Gerät zu wählen
+    // Bottom Sheet öffnen, um das Ziel-Gerät zu wählen
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF0A0A0A),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (context) {
-        return FutureBuilder<http.Response>(
-          future: http.get(Uri.parse('$serverBaseUrl/admin/devices')),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const SizedBox(height: 200, child: Center(child: CircularProgressIndicator(color: Color(0xFF00FF41))));
-            }
-            
-            final data = json.decode(snapshot.data!.body);
-            final List<dynamic> devices = data['devices'] ?? [];
-            final onlineDevices = devices.where((d) => d['online'] == true && d['client_id'] != _myClientId).toList();
+        // 🔥 PHASE 2: Kein FutureBuilder mehr! Wir haben die Liste sofort parat!
+        final onlineDevices = DeviceManager().onlineDevices
+            .where((d) => d.id != _myClientId).toList();
 
-            return Container(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text("SEND ${sharedData.length} FILES TO...", style: const TextStyle(color: Color(0xFF00FF41), fontWeight: FontWeight.bold, fontSize: 18, letterSpacing: 1.5)),
-                  const SizedBox(height: 16),
-                  
-                  if (onlineDevices.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(20),
-                      child: Text("No other online devices found.", style: TextStyle(color: Colors.grey)),
-                    )
-                  else
-                    ...onlineDevices.map((device) => ListTile(
-                      leading: const Icon(Icons.computer, color: Color(0xFF00E5FF)),
-                      title: Text(device['name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                      subtitle: const Text("Online", style: TextStyle(color: Color(0xFF00FF41), fontSize: 10)),
-                      tileColor: const Color(0xFF1A1A1A),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      onTap: () async {
-                        Navigator.pop(context); // Sheet schließen
-                        
-                        // Senden via DataLink auslösen
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text("🚀 Sende an ${device['name']}..."), backgroundColor: const Color(0xFF00FF41)),
-                        );
-                        
-                        final filesToUpload = sharedData.map((e) => File(e.path)).toList();
-                        
-                        try {
-                          await DataLinkService().sendFiles(filesToUpload, [device['client_id']]);
-                        } catch (e) {
-                          print("Transfer Error: $e");
-                        }
-                      },
-                    )),
-                ],
-              ),
-            );
-          },
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text("SEND ${sharedData.length} FILES TO...", style: const TextStyle(color: Color(0xFF00FF41), fontWeight: FontWeight.bold, fontSize: 18, letterSpacing: 1.5)),
+              const SizedBox(height: 16),
+              
+              if (onlineDevices.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Text("No other online devices found.", style: TextStyle(color: Colors.grey)),
+                )
+              else
+                ...onlineDevices.map((device) => ListTile(
+                  leading: const Icon(Icons.computer, color: Color(0xFF00E5FF)),
+                  title: Text(device.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  subtitle: const Text("Online", style: TextStyle(color: Color(0xFF00FF41), fontSize: 10)),
+                  tileColor: const Color(0xFF1A1A1A),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  onTap: () async {
+                    Navigator.pop(context); 
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text("🚀 Sende an ${device.name}..."), backgroundColor: const Color(0xFF00FF41)),
+                    );
+                    
+                    final filesToUpload = sharedData.map((e) => File(e.path)).toList();
+                    try {
+                      await DataLinkService().sendFiles(filesToUpload, [device.id]);
+                    } catch (e) {
+                      print("Transfer Error: $e");
+                    }
+                  },
+                )),
+            ],
+          ),
         );
       },
     );
@@ -212,17 +202,21 @@ class _MainSystemShellState extends State<MainSystemShell> with WidgetsBindingOb
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Wenn die App in den Hintergrund geht, minimiert oder der Bildschirm aus ist
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.hidden) {
       print("📱 App minimiert -> Aktiviere Daten-Spar-Modus");
       _heartbeatService.pause();
       DataLinkService().pause();
-      DeviceManager().pause(); // 🔥 NEU
+      DeviceManager().pause(); 
     } else if (state == AppLifecycleState.resumed) {
       print("📱 App im Fokus -> Volle Geschwindigkeit");
       _heartbeatService.resume();
       DataLinkService().resume();
-      DeviceManager().resume(); // 🔥 NEU
+      DeviceManager().resume(); 
+    } 
+    // 🔥 NEU: Der Death-Ping! Wird aufgerufen, wenn die App weggewischt wird.
+    else if (state == AppLifecycleState.detached) {
+      print("💀 App wird beendet -> Sende Disconnect an Server!");
+      _heartbeatService.stop(); // Sendet sofort den /disconnect Befehl!
     }
   }
 
