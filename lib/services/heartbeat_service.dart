@@ -16,6 +16,8 @@ class HeartbeatService {
   bool _isRunning = false;
   bool _isConnected = false;
   String _localIp = "0.0.0.0";
+  List<dynamic> _lastKnownPeers = [];
+  List<dynamic> get lastKnownPeers => _lastKnownPeers;
   
   // ✅ NEU: Timestamp für Smart-Updates
   DateTime? _lastStorageRegistration;
@@ -208,18 +210,15 @@ class HeartbeatService {
             _notifyConnectionListeners(true);
           }
 
-          try {
+         try {
             final data = json.decode(response.body);
             final peers = data['active_peers'] as List<dynamic>? ?? [];
+            
+            _lastKnownPeers = peers; // 🔥 FIX: Speichert den letzten Stand für sofortiges Laden
+            
             _notifyPeerListeners(peers);
           } catch (e) {}
 
-          // ✅ OPTIMIERUNG: Storage Registration drosseln
-          // Wir senden nur, wenn:
-          // 1. Wir uns gerade frisch verbunden haben (Server könnte restartet sein)
-          // 2. ODER: Das letzte Update länger als 60 Sekunden her ist (Refresh)
-          // 3. ODER: Ein manuelles Update angefordert wurde (_lastStorageRegistration == null)
-          
           final now = DateTime.now();
           if (justReconnected || 
               _lastStorageRegistration == null || 

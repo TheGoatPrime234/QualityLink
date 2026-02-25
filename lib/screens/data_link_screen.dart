@@ -117,6 +117,13 @@ Future<void> _initializeServices() async {
   }
 
   void _setupHeartbeatService() {
+    // 🔥 FIX: Sofort den letzten bekannten Stand aus dem RAM laden (0 Millisekunden Ladezeit)
+    if (_heartbeat.lastKnownPeers.isNotEmpty) {
+      _peers = _heartbeat.lastKnownPeers
+          .map((p) => Peer.fromJson(p, _heartbeat.localIp))
+          .toList();
+    }
+
     _heartbeat.addConnectionListener((isConnected) {
       if (mounted) setState(() => _isConnected = isConnected);
     });
