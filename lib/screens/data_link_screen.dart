@@ -700,13 +700,17 @@ Future<void> _pickAndSendFiles() async {
     
     if (transfer.isCompleted) {
       icon = Icons.check_circle;
-      iconColor = AppColors.primary; // ✅ Cyan
+      iconColor = AppColors.primary; 
     } else if (transfer.isFailed) {
       icon = Icons.error;
-      iconColor = AppColors.warning; // ✅ Pink
+      iconColor = AppColors.warning; 
+    } else if (transfer.status == TransferStatus.queued) { 
+      // 🔥 NEU: Graue Sanduhr für wartende Dateien!
+      icon = Icons.hourglass_empty;
+      iconColor = Colors.grey; 
     } else {
       icon = Icons.sync;
-      iconColor = AppColors.accent; // ✅ Türkis (statt Orange)
+      iconColor = AppColors.accent; 
     }
 
     return ListTile(

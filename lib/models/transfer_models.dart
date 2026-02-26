@@ -4,6 +4,7 @@
 
 enum TransferStatus {
   offered,
+  queued, // 🔥 NEU: Der Warteschlangen-Status
   zipping,
   uploading,
   downloading,
@@ -105,6 +106,7 @@ class Transfer {
       case 'RELAY_REQUESTED': status = TransferStatus.relayRequested; break;
       case 'RELAY_READY': status = TransferStatus.relayReady; break;
       case 'COMPLETED': status = TransferStatus.completed; break;
+      case 'QUEUED': status = TransferStatus.queued; break; 
       default: status = TransferStatus.offered;
     }
 

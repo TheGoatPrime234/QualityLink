@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:archive/archive_io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart'; // ✅ NEU
+import 'dart:collection';
 
 import '../config/server_config.dart';
 import '../models/transfer_models.dart';
@@ -38,6 +39,9 @@ class DataLinkService {
   // ✅ NEU: WebSocket State
   WebSocketChannel? _wsChannel;
   bool _isWsConnected = false;
+  final Queue<Future<void> Function()> _transferQueue = Queue();
+  int _activeQueueTasks = 0;
+  final int _maxConcurrent = 1;
 
   final http.Client _httpClient = http.Client();
   final List<Transfer> _transfers = [];
@@ -197,6 +201,28 @@ class DataLinkService {
   // =============================================================================
   // WEBSOCKET LOGIC (🔥 NEU in v3)
   // =============================================================================
+
+  void _enqueueTransfer(Future<void> Function() task) {
+    _transferQueue.add(task);
+    _processQueue();
+  }
+
+  // 🔥 NEU: Der Arbeiter, der die Dateien der Reihe nach abarbeitet
+  Future<void> _processQueue() async {
+    if (_activeQueueTasks >= _maxConcurrent || _transferQueue.isEmpty) return;
+    
+    _activeQueueTasks++;
+    final task = _transferQueue.removeFirst();
+    
+    try {
+      await task();
+    } catch (e) {
+      print("❌ Queue task failed: $e");
+    } finally {
+      _activeQueueTasks--;
+      _processQueue(); // Nächste Aufgabe in der Schlange starten!
+    }
+  }
 
   void _connectWebSocket() {
     if (_wsChannel != null) return;
@@ -377,7 +403,7 @@ class DataLinkService {
           print("🚚 Moved to: $newPath");
         }
       }
-      
+
       else if (action == 'create_folder') {
         final path = params['path'];
         final folderName = params['folder_name'];
@@ -673,47 +699,54 @@ class DataLinkService {
     if (!file.existsSync()) throw Exception("File not found");
 
     final transferId = _generateTransferId();
-    // Pfad für Windows & Server sicher machen
     final fileName = p.basename(file.path); 
+    final fileSize = file.lengthSync();
 
-    print("📤 Sending file: $fileName");
+    // 1. Sofort als "QUEUED" in der UI anzeigen lassen, bevor irgendwas passiert!
+    final initialTransfer = Transfer(
+      id: transferId,
+      fileName: fileName,
+      fileSize: fileSize,
+      senderId: _clientId,
+      targetIds: targetIds,
+      status: TransferStatus.queued,
+      destinationPath: destinationPath,
+    );
+    _transfers.insert(0, initialTransfer);
+    _notifyTransferUpdate(initialTransfer);
 
-    for (var targetId in targetIds) {
-      // 1. Dem Server Bescheid sagen ("Ich will was senden")
-      if (_cancelledTransfers.contains(transferId)) break;
-      await _offerFile(
-        filePath: file.path,
-        targetId: targetId,
-        transferId: transferId,
-        destinationPath: destinationPath,
-      );
+    // 2. Die eigentliche Arbeit hinten in die Warteschlange einreihen!
+    _enqueueTransfer(() async {
+      if (_cancelledTransfers.contains(transferId)) return;
+      print("📤 Uploading from queue: $fileName");
 
-      if (targetId == "SERVER") {
-         print("⚡ Target is SERVER. Bypassing P2P, requesting direct Upload...");
-         await _requestRelay(transferId, file.path);
-         continue; // Direkt zum nächsten Gerät springen
-      }
+      for (var targetId in targetIds) {
+        if (_cancelledTransfers.contains(transferId)) break;
+        
+        await _offerFile(
+          filePath: file.path,
+          targetId: targetId,
+          transferId: transferId,
+          destinationPath: destinationPath,
+        );
 
-      // 2. Der entscheidende Moment: P2P oder Relay?
-      try {
-         print("⚡ Trying P2P connection to $targetId...");
-         await Future.delayed(const Duration(seconds: 2));
-         
-         // Wenn der Transfer noch nicht läuft/fertig ist, nehmen wir an, P2P ist gescheitert.
-         if (!_activeOperations.containsKey(transferId)) {
-           throw Exception("P2P too slow, switching to Relay");
+        if (targetId == "SERVER") {
+           await _requestRelay(transferId, file.path);
+           continue;
+        }
+
+        try {
+           await Future.delayed(const Duration(seconds: 2));
+           if (!_activeOperations.containsKey(transferId)) {
+             throw Exception("P2P too slow, switching to Relay");
+           }
+         } catch (p2pError) {
+           await _requestRelay(transferId, file.path);
          }
-         
-       } catch (p2pError) {
-         print("⚠️ P2P unavailable ($p2pError). Switching to RELAY Cloud Upload...");
-         
-         // 3. FALLBACK: Relay anfordern!
-         // Das lädt die Datei auf den Raspberry Pi hoch.
-         await _requestRelay(transferId, file.path);
-       }
-    }
+      }
+    });
     
-    _notifyMessage("✅ Transfer started: $fileName");
+    _notifyMessage("⏳ Added to queue: $fileName");
     return transferId;
   }
 
