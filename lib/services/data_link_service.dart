@@ -377,6 +377,19 @@ class DataLinkService {
           print("🚚 Moved to: $newPath");
         }
       }
+      
+      else if (action == 'create_folder') {
+        final path = params['path'];
+        final folderName = params['folder_name'];
+        if (path != null && folderName != null) {
+          final newDirPath = p.join(path, folderName);
+          final dir = Directory(newDirPath);
+          if (!await dir.exists()) {
+            await dir.create(recursive: true);
+            print("📁 Created folder: $newDirPath");
+          }
+        }
+      }
       // 5. TRANSFER REQUEST (Download mit Ordner-Support!)
       else if (action == 'request_transfer') {
         final path = params['path'];

@@ -445,6 +445,32 @@ Future<void> uploadFile() async {
       _setLoading(false);
     }
   }
+  
+  Future<void> createFolder(String folderName) async {
+    // Wenn wir im Hauptmenü (Drives) sind, können wir keinen Ordner erstellen
+    if (currentDeviceId.isEmpty || currentPath == "ROOT" || currentPath == "Drives") {
+      errorMessage = "Select a specific drive first.";
+      notifyListeners();
+      return;
+    }
+
+    _setLoading(true);
+    try {
+      await _sendCommandToRelay("create_folder", {
+        "path": currentPath,
+        "folder_name": folderName
+      });
+      
+      // Kurz warten, bis das andere Gerät den Ordner erstellt hat
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      // Aktuellen Pfad neu laden, damit der neue Ordner in der Liste auftaucht
+      _loadRemotePath(currentDeviceId, currentPath);
+    } catch (e) {
+      errorMessage = "Create folder failed: $e";
+      _setLoading(false);
+    }
+  }
 
   Future<void> _loadRemotePath(String deviceId, String? path) async {
     final int currentRequest = ++_requestCounter;

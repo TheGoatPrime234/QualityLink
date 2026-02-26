@@ -201,6 +201,11 @@ Widget _buildHeader(BuildContext context, FileVaultController controller) {
                       ),
                     ),
                     IconButton(
+                      icon: const Icon(Icons.create_new_folder, color: AppColors.accent),
+                      onPressed: () => _showCreateFolderDialog(context, controller),
+                      tooltip: "NEW FOLDER",
+                    ),
+                    IconButton(
                       icon: const Icon(Icons.upload_file, color: AppColors.primary),
                       onPressed: () => controller.uploadFile(),
                       tooltip: "UPLOAD HERE",
@@ -461,15 +466,23 @@ Widget _buildFileItem(BuildContext context, FileVaultController controller, VfsN
 
     return TechCard(
       borderColor: AppColors.primary,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _buildActionButton(Icons.close, "CANCEL", () => controller.clearSelection()),
-          _buildActionButton(Icons.copy, "COPY", () => controller.copySelection()),
-          _buildActionButton(Icons.drive_file_move, "MOVE", () => controller.cutSelection()),
-          _buildActionButton(Icons.download, "GET", () => controller.downloadSelection()),
-          _buildActionButton(Icons.delete, "DEL", () => controller.deleteNodes(), isDanger: true),
-        ],
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _buildActionButton(Icons.close, "CANCEL", () => controller.clearSelection()),
+            
+            // 🔥 NEU: Der Rename-Button (nur sichtbar, wenn genau 1 Element markiert ist)
+            if (controller.selectedNodes.length == 1)
+              _buildActionButton(Icons.edit, "RENAME", () => _showRenameDialog(context, controller, controller.selectedNodes.first)),
+              
+            _buildActionButton(Icons.copy, "COPY", () => controller.copySelection()),
+            _buildActionButton(Icons.drive_file_move, "MOVE", () => controller.cutSelection()),
+            _buildActionButton(Icons.download, "GET", () => controller.downloadSelection()),
+            _buildActionButton(Icons.delete, "DEL", () => controller.deleteNodes(), isDanger: true),
+          ],
+        ),
       ),
     );
   }
@@ -529,6 +542,78 @@ Widget _buildFileItem(BuildContext context, FileVaultController controller, VfsN
         ctrl.changeSort(opt);
         Navigator.pop(ctx);
       },
+    );
+  }
+  void _showCreateFolderDialog(BuildContext context, FileVaultController controller) {
+    if (controller.currentPath == "ROOT" || controller.currentPath == "Drives") {
+       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Select a drive/folder first", style: TextStyle(color: Colors.white)), backgroundColor: AppColors.warning));
+       return;
+    }
+    final TextEditingController textCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.card,
+        title: const Text("NEW FOLDER", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+        content: TextField(
+          controller: textCtrl,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: "Folder Name",
+            hintStyle: TextStyle(color: AppColors.textDim),
+            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primary)),
+            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.accent)),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCEL", style: TextStyle(color: Colors.grey))),
+          TextButton(
+            onPressed: () {
+              if (textCtrl.text.trim().isNotEmpty) {
+                controller.createFolder(textCtrl.text.trim());
+                Navigator.pop(ctx);
+              }
+            }, 
+            child: const Text("CREATE", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold))
+          ),
+        ],
+      )
+    );
+  }
+
+  void _showRenameDialog(BuildContext context, FileVaultController controller, VfsNode node) {
+    final TextEditingController textCtrl = TextEditingController(text: node.name);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.card,
+        title: const Text("RENAME NODE", style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+        content: TextField(
+          controller: textCtrl,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: "New Name",
+            hintStyle: TextStyle(color: AppColors.textDim),
+            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.accent)),
+            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primary)),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCEL", style: TextStyle(color: Colors.grey))),
+          TextButton(
+            onPressed: () {
+              if (textCtrl.text.trim().isNotEmpty && textCtrl.text.trim() != node.name) {
+                controller.renameNode(node, textCtrl.text.trim());
+                controller.clearSelection(); 
+                Navigator.pop(ctx);
+              }
+            }, 
+            child: const Text("RENAME", style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold))
+          ),
+        ],
+      )
     );
   }
 }
