@@ -128,21 +128,11 @@ Future<void> _initializeServices() async {
   }
 
   void _setupHeartbeatService() {
-    // 🔥 FIX: Sofort laden, aber das eigene Gerät (.where) herausfiltern!
-    _peers = DeviceManager().devices
-        .where((d) => d.id != widget.clientId)
-        .toList();
+    _updatePeerList();
     
     // Auf globale Updates des DeviceManagers hören
     DeviceManager().addListener(() {
-      if (mounted) {
-        setState(() {
-          // 🔥 FIX: Auch bei Live-Updates das eigene Gerät verstecken!
-          _peers = DeviceManager().devices
-              .where((d) => d.id != widget.clientId)
-              .toList();
-        });
-      }
+      if (mounted) _updatePeerList();
     });
 
     _heartbeat.addConnectionListener((isConnected) {
@@ -150,6 +140,26 @@ Future<void> _initializeServices() async {
     });
 
     setState(() => _isConnected = _heartbeat.isConnected);
+  }
+
+  // 🔥 NEU: Baut die Liste und setzt die Cloud immer nach ganz vorne!
+  void _updatePeerList() {
+    final cloudDevice = NetworkDevice(
+      id: "CLOUD",
+      name: "SERVER CLOUD",
+      type: "cloud", // Spezieller Typ für das Icon
+      ip: "127.0.0.1",
+      isOnline: true,
+      isSameLan: true, // Damit es im ersten P2P-Reiter (oben) auftaucht
+    );
+    
+    final otherDevices = DeviceManager().devices
+        .where((d) => d.id != widget.clientId)
+        .toList();
+        
+    setState(() {
+      _peers = [cloudDevice, ...otherDevices];
+    });
   }
 
   void _setupDataLinkListeners() {
@@ -647,7 +657,8 @@ Future<void> _pickAndSendFiles() async {
           final peer = peers[index];
           final isSelected = _selectedPeerIds.contains(peer.id);
           // Farbe basierend auf Typ (P2P = Primary, Relay = Accent)
-          final activeColor = peer.isSameLan ? AppColors.primary : AppColors.accent;
+          final isCloud = peer.id == "CLOUD";
+          final activeColor = isCloud ? const Color(0xFFAA00FF) : (peer.isSameLan ? AppColors.primary : AppColors.accent);
           
           return GestureDetector(
             onTap: () {
@@ -685,6 +696,7 @@ Future<void> _pickAndSendFiles() async {
       case 'windows': return Icons.computer;
       case 'macos': return Icons.laptop_mac;
       case 'linux': return Icons.desktop_mac;
+      case 'cloud': return Icons.cloud;
       default: return Icons.devices;
     }
   }

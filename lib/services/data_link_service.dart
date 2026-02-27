@@ -748,6 +748,8 @@ class DataLinkService {
     // bevor wir in die Warteschlange gehen! So kennt er die Gesamt-MB sofort.
     for (var targetId in targetIds) {
       if (_cancelledTransfers.contains(transferId)) break;
+      if (targetId == "CLOUD") continue; // 🔥 CLOUD braucht kein Offer-Ping
+
       await _offerFile(
         filePath: file.path,
         targetId: targetId,
@@ -764,9 +766,9 @@ class DataLinkService {
       for (var targetId in targetIds) {
         if (_cancelledTransfers.contains(transferId)) break;
 
-        // Wenn es explizit an den Server geht (Cloud Upload)
-        if (targetId == "SERVER") {
-           await _requestRelay(transferId, file.path);
+        // 🔥 NEU: Der direkte Upload ins Cloud-Laufwerk!
+        if (targetId == "CLOUD") {
+           await _uploadToCloud(transferId, file.path);
            continue;
         }
 
@@ -789,6 +791,83 @@ class DataLinkService {
     
     _notifyMessage("⏳ Added to queue: $fileName");
     return transferId;
+  }
+
+  // 🔥 NEU: Der direkte Upload in das persönliche Cloud-Laufwerk
+  Future<void> _uploadToCloud(String transferId, String filePath) async {
+    _notifyProcessingState(true);
+    _notifyProgress(transferId, 0.0, "Uploading to Cloud...");
+
+    try {
+      String cleanPath = p.normalize(filePath.trim());
+      File file = File(cleanPath);
+      if (!file.existsSync()) {
+        try { cleanPath = file.resolveSymbolicLinksSync(); file = File(cleanPath); } catch (_) {}
+      }
+      if (!file.existsSync()) throw Exception("File not found");
+
+      final fileSize = file.lengthSync();
+      final fileName = p.basename(cleanPath);
+      final safeFileName = Uri.encodeComponent(fileName);
+
+      print("🚀 Uploading $fileName to CLOUD");
+
+      // Wir rufen den neuen Cloud-Endpunkt auf!
+      final uri = Uri.parse('$serverBaseUrl/cloud/upload');
+      final request = http.StreamedRequest('POST', uri);
+      
+      final boundary = 'dart-boundary-${DateTime.now().millisecondsSinceEpoch}';
+      request.headers['Content-Type'] = 'multipart/form-data; boundary=$boundary';
+      
+      // Wir senden den Gerätenamen mit, damit der Server den Ordner benennen kann!
+      final deviceNameField = '--$boundary\r\nContent-Disposition: form-data; name="device_name"\r\n\r\n$_deviceName\r\n';
+      final fileHeader = '--$boundary\r\nContent-Disposition: form-data; name="file"; filename="$safeFileName"\r\nContent-Type: application/octet-stream\r\n\r\n';
+      final endBoundary = '\r\n--$boundary--\r\n';
+      
+      request.contentLength = utf8.encode(deviceNameField + fileHeader + endBoundary).length + fileSize;
+      
+      final responseFuture = _httpClient.send(request);
+      
+      request.sink.add(utf8.encode(deviceNameField));
+      request.sink.add(utf8.encode(fileHeader));
+      
+      int sentFileBytes = 0;
+      int lastNotifiedBytes = 0;
+      Stream<List<int>> stream = file.openRead();
+      
+      await for (var chunk in stream) {
+        if (_cancelledTransfers.contains(transferId)) {
+           await request.sink.close();
+           throw Exception("CANCELLED_BY_USER");
+        }
+        request.sink.add(chunk);
+        sentFileBytes += chunk.length;
+        if (sentFileBytes - lastNotifiedBytes >= (512 * 1024) || sentFileBytes == fileSize) {
+           _notifyProgress(transferId, sentFileBytes / fileSize, "Uploading to Cloud...");
+           lastNotifiedBytes = sentFileBytes;
+        }
+      }
+      
+      request.sink.add(utf8.encode(endBoundary));
+      await request.sink.close();
+      
+      final response = await responseFuture;
+      if (response.statusCode == 200) {
+        _notifyProgress(transferId, 1.0, "Cloud Upload Complete");
+        final idx = _transfers.indexWhere((t) => t.id == transferId);
+        if (idx != -1) _updateTransferStatus(_transfers[idx], TransferStatus.completed);
+        _notifyMessage("☁️ Saved to Cloud: $fileName");
+      } else {
+        throw Exception("Server Error ${response.statusCode}");
+      }
+    } catch (e) {
+      print("❌ Cloud Upload Failed: $e");
+      final idx = _transfers.indexWhere((t) => t.id == transferId);
+      if (idx != -1) _updateTransferStatus(_transfers[idx], TransferStatus.failed);
+      _notifyMessage("Cloud upload failed: $e", isError: true);
+    } finally {
+      _notifyProcessingState(false);
+    }
   }
 
   Future<List<String>> sendFiles(List<File> files, List<String> targetIds, {String? destinationPath}) async {
