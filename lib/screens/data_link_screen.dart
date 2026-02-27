@@ -128,13 +128,20 @@ Future<void> _initializeServices() async {
   }
 
   void _setupHeartbeatService() {
-    // 1. Sofort laden!
-    _peers = DeviceManager().devices;
-
-    // 2. Auf globale Updates des DeviceManagers hören
+    // 🔥 FIX: Sofort laden, aber das eigene Gerät (.where) herausfiltern!
+    _peers = DeviceManager().devices
+        .where((d) => d.id != widget.clientId)
+        .toList();
+    
+    // Auf globale Updates des DeviceManagers hören
     DeviceManager().addListener(() {
       if (mounted) {
-        setState(() => _peers = DeviceManager().devices);
+        setState(() {
+          // 🔥 FIX: Auch bei Live-Updates das eigene Gerät verstecken!
+          _peers = DeviceManager().devices
+              .where((d) => d.id != widget.clientId)
+              .toList();
+        });
       }
     });
 
