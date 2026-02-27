@@ -169,6 +169,8 @@ class FileServerService {
         '$userPath\\Videos',
         '$userPath\\Music',
         '$userPath\\Desktop',
+        '$userPath\\OneDrive', 
+        '$userPath\\OneDrive - Personal', // Bei manchen Windows 11 Versionen heißt er so
       ];
       
       paths = paths.where((path) => Directory(path).existsSync()).toList();
