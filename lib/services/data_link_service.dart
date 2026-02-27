@@ -731,7 +731,7 @@ class DataLinkService {
     final fileName = p.basename(file.path); 
     final fileSize = file.lengthSync();
 
-    // 1. Sofort als "QUEUED" in der UI anzeigen lassen, bevor irgendwas passiert!
+    // 1. Sofort in die UI als "Wartend" eintragen
     final initialTransfer = Transfer(
       id: transferId,
       fileName: fileName,
@@ -744,33 +744,44 @@ class DataLinkService {
     _transfers.insert(0, initialTransfer);
     _notifyTransferUpdate(initialTransfer);
 
-    // 2. Die eigentliche Arbeit hinten in die Warteschlange einreihen!
+    // 🔥 DER FIX: Wir bieten dem Empfänger die Datei SOFORT an, 
+    // bevor wir in die Warteschlange gehen! So kennt er die Gesamt-MB sofort.
+    for (var targetId in targetIds) {
+      if (_cancelledTransfers.contains(transferId)) break;
+      await _offerFile(
+        filePath: file.path,
+        targetId: targetId,
+        transferId: transferId,
+        destinationPath: destinationPath,
+      );
+    }
+
+    // 2. Jetzt packen wir nur noch die Überwachung (und den eventuellen Cloud-Upload) in die Schlange
     _enqueueTransfer(() async {
       if (_cancelledTransfers.contains(transferId)) return;
-      print("📤 Uploading from queue: $fileName");
+      print("📤 Processing queue for: $fileName");
 
       for (var targetId in targetIds) {
         if (_cancelledTransfers.contains(transferId)) break;
-        
-        await _offerFile(
-          filePath: file.path,
-          targetId: targetId,
-          transferId: transferId,
-          destinationPath: destinationPath,
-        );
 
+        // Wenn es explizit an den Server geht (Cloud Upload)
         if (targetId == "SERVER") {
            await _requestRelay(transferId, file.path);
            continue;
         }
 
+        // Bei P2P: 2 Sekunden warten, ob der Empfänger die Datei abholt
         try {
            await Future.delayed(const Duration(seconds: 2));
+           
            final currentT = _transfers.firstWhere((t) => t.id == transferId, orElse: () => initialTransfer);
+           
+           // Wenn sie immer noch auf "Offered" oder "Queued" steht, hat P2P nicht geklappt
            if (currentT.status == TransferStatus.offered || currentT.status == TransferStatus.queued) {
              throw Exception("P2P Timeout - Receiver offline or NAT blocked");
            }
          } catch (p2pError) {
+           // Fallback: Ab in die Cloud!
            await _requestRelay(transferId, file.path);
          }
       }
@@ -781,15 +792,15 @@ class DataLinkService {
   }
 
   Future<List<String>> sendFiles(List<File> files, List<String> targetIds, {String? destinationPath}) async {
-    final futures = files.map((f) => sendFile(f, targetIds, destinationPath: destinationPath));
-    
-    try {
-      final ids = await Future.wait(futures);
-      return ids.toList();
-    } catch (e) {
-      print("Batch Upload Error: $e");
-      return [];
+    List<String> ids = [];
+    for (var f in files) {
+      try {
+        ids.add(await sendFile(f, targetIds, destinationPath: destinationPath));
+      } catch(e) {
+        print("Batch Upload Error for ${f.path}: $e");
+      }
     }
+    return ids;
   }
 
   Future<String> sendFolder(Directory folder, List<String> targetIds, {Function(double, String)? onProgress}) async {
