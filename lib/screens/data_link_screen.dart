@@ -59,6 +59,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
   bool _serviceStarted = false;
   String? _currentTransferId;
   final Set<String> _currentBatchIds = {};
+  bool _showFilePreview = true; // 🔥 NEU: Steuert die Vorschau
 
   @override
   void initState() {
@@ -299,6 +300,9 @@ Future<void> _locateSystemDownloadFolder() async {
       _customPaths = prefs.getStringList('custom_paths') ?? [];
       final savedPath = prefs.getString('selected_path');
       if (savedPath != null) _selectedPath = savedPath;
+      
+      // 🔥 NEU: Lade den Zustand der Vorschau
+      _showFilePreview = prefs.getBool('datalink_show_preview') ?? true; 
     });
   }
 
@@ -306,6 +310,10 @@ Future<void> _locateSystemDownloadFolder() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('custom_paths', _customPaths);
     await prefs.setString('selected_path', _selectedPath);
+    
+    // 🔥 NEU: Speichere den Zustand
+    await prefs.setBool('datalink_show_preview', _showFilePreview); 
+    
     _datalink.setDownloadPath(_currentDownloadPath);
   }
 
@@ -507,11 +515,37 @@ Future<void> _pickAndSendFiles() async {
               subtitle1: "ID: ${widget.clientId}",
               subtitle2: "P2P IP: ${_datalink.myLocalIp}:${_datalink.localServerPort}",
               onSettingsTap: () {
-                // Hier kommt später dein Einstellungs-Menü hin
-                print("Settings tapped");
+                showModalBottomSheet(
+                  context: context,
+                  backgroundColor: AppColors.card,
+                  shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+                  builder: (ctx) => StatefulBuilder( // StatefulBuilder aktualisiert den Switch live!
+                    builder: (ctx, setModalState) => Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text("DATALINK SETTINGS", style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold, fontSize: 16)),
+                          const SizedBox(height: 20),
+                          SwitchListTile(
+                            title: const Text("Show File Previews", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                            subtitle: const Text("Load thumbnails in the activity log", style: TextStyle(color: AppColors.textDim, fontSize: 12)),
+                            activeColor: AppColors.primary,
+                            value: _showFilePreview,
+                            onChanged: (val) {
+                              setState(() => _showFilePreview = val); // Screen aktualisieren
+                              setModalState(() => _showFilePreview = val); // Switch aktualisieren
+                              _saveSettings();
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
               },
             ),
-            
             Expanded(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.only(bottom: 20), 
@@ -771,7 +805,6 @@ Future<void> _pickAndSendFiles() async {
       icon = Icons.error;
       iconColor = AppColors.warning; 
     } else if (transfer.status == TransferStatus.queued) { 
-      // 🔥 NEU: Graue Sanduhr für wartende Dateien!
       icon = Icons.hourglass_empty;
       iconColor = Colors.grey; 
     } else {
@@ -779,17 +812,57 @@ Future<void> _pickAndSendFiles() async {
       iconColor = AppColors.accent; 
     }
 
+    // 🔥 NEU: Die Vorschau (Thumbnail) Logik
+    final ext = p.extension(transfer.fileName).toLowerCase();
+    final isImage = ['.jpg', '.jpeg', '.png', '.gif', '.webp'].contains(ext);
+
+    Widget leadingWidget;
+    
+    // Wenn Vorschau aktiv ist, es ein Bild ist und der Transfer fertig ist
+    if (_showFilePreview && isImage && transfer.isCompleted) {
+       // Wir suchen den Pfad zur Datei
+       String potentialPath = p.join(transfer.destinationPath ?? _currentDownloadPath, transfer.fileName);
+       
+       leadingWidget = Container(
+         width: 40, height: 40,
+         decoration: BoxDecoration(
+           color: iconColor.withValues(alpha: 0.1),
+           borderRadius: BorderRadius.circular(4),
+           border: Border.all(color: iconColor.withValues(alpha: 0.3)),
+         ),
+         child: ClipRRect(
+           borderRadius: BorderRadius.circular(3),
+           child: Image.file(
+             File(potentialPath),
+             fit: BoxFit.cover,
+             // Fallback: Wenn die Datei gelöscht oder verschoben wurde, zeige das normale Icon
+             errorBuilder: (ctx, err, stack) => Icon(icon, color: iconColor, size: 20),
+           ),
+         ),
+       );
+    } else {
+       // Standard-Icon für laufende Transfers oder Nicht-Bilder
+       leadingWidget = Container(
+         width: 40, height: 40,
+         decoration: BoxDecoration(
+           color: iconColor.withValues(alpha: 0.1),
+           borderRadius: BorderRadius.circular(4),
+           border: Border.all(color: iconColor.withValues(alpha: 0.3)),
+         ),
+         child: Icon(icon, color: iconColor, size: 20),
+       );
+    }
+
     return ListTile(
       onTap: () => _showTransferDetails(transfer),
       visualDensity: const VisualDensity(horizontal: 0, vertical: -3),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4), // Etwas mehr Platz für die Box
       minVerticalPadding: 0, 
-      leading: Icon(icon, color: iconColor), 
-      title: Text(transfer.fileName, style: const TextStyle(fontSize: 18), maxLines: 1, overflow: TextOverflow.ellipsis),
+      leading: leadingWidget, // 🔥 Hier bauen wir unsere neue Vorschau/Icon-Box ein!
+      title: Text(transfer.fileName, style: const TextStyle(fontSize: 15), maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(
         transfer.isCompleted ? "Complete • ${transfer.sizeFormatted}" : transfer.isFailed ? "Failed" : "${transfer.status.name} • ${transfer.progressFormatted}",
-        // Success -> Cyan, sonst Grau
-        style: TextStyle(color: transfer.isCompleted ? AppColors.primary : AppColors.textDim, fontSize: 13),
+        style: TextStyle(color: transfer.isCompleted ? AppColors.primary : AppColors.textDim, fontSize: 12),
       ),
       trailing: transfer.isActive
           ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(value: transfer.progress, strokeWidth: 2, color: AppColors.accent))
