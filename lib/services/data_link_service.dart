@@ -658,20 +658,49 @@ class DataLinkService {
         }
 
         final totalBytes = file.lengthSync();
-        // Header sicher machen (encodeComponent verhindert Header-Fehler bei Umlauten)
         final safeName = Uri.encodeComponent(p.basename(filePath));
-        
         request.response.statusCode = 200;
         request.response.headers.add("Content-Type", "application/octet-stream");
         request.response.headers.add("Content-Length", totalBytes);
         request.response.headers.add("Content-Disposition", 'attachment; filename="$safeName"');
+        String? tId;
+        for (var entry in _activeOperations.entries) {
+          if (entry.value == filePath) tId = entry.key;
+        }
 
-        // Streaming...
         try {
-          await request.response.addStream(file.openRead());
+          if (tId != null) {
+            _notifyProcessingState(true); // Schaltet die Progressbar ein!
+            final idx = _transfers.indexWhere((t) => t.id == tId);
+            if (idx != -1) _updateTransferStatus(_transfers[idx], TransferStatus.uploading);
+            
+            int sent = 0;
+            int lastNotified = 0;
+            await for (var chunk in file.openRead()) {
+               request.response.add(chunk);
+               sent += chunk.length;
+               // Balken sauber mitlaufen lassen
+               if (sent - lastNotified >= (512 * 1024) || sent == totalBytes) {
+                  _notifyProgress(tId, sent / totalBytes, "Uploading (P2P)...");
+                  lastNotified = sent;
+               }
+            }
+          } else {
+             // Fallback für Dateien ohne Transfer-ID
+             await request.response.addStream(file.openRead());
+          }
           await request.response.close();
+          
+          if (tId != null) {
+             _notifyProgress(tId, 1.0, "Completed");
+             final idx = _transfers.indexWhere((t) => t.id == tId);
+             if (idx != -1) _updateTransferStatus(_transfers[idx], TransferStatus.completed);
+             _activeOperations.remove(tId);
+          }
         } catch (_) {
           // Client hat abgebrochen
+        } finally {
+          if (tId != null) _notifyProcessingState(false);
         }
 
       } else {
@@ -737,8 +766,9 @@ class DataLinkService {
 
         try {
            await Future.delayed(const Duration(seconds: 2));
-           if (!_activeOperations.containsKey(transferId)) {
-             throw Exception("P2P too slow, switching to Relay");
+           final currentT = _transfers.firstWhere((t) => t.id == transferId, orElse: () => initialTransfer);
+           if (currentT.status == TransferStatus.offered || currentT.status == TransferStatus.queued) {
+             throw Exception("P2P Timeout - Receiver offline or NAT blocked");
            }
          } catch (p2pError) {
            await _requestRelay(transferId, file.path);
@@ -819,33 +849,26 @@ class DataLinkService {
 
   Future<void> _handleOfferedTransfer(Transfer t, String path) async {
     _processedTransferIds.add(t.id);
+    _updateTransferStatus(t, TransferStatus.queued); // 🔥 FIX: In UI als wartend anzeigen
     
-    // Zielpfad bestimmen
-    File target = File(p.join(t.destinationPath ?? path, t.fileName));
-    
-    // Versuch 1: P2P Download
-    bool p2pSuccess = await _tryP2PDownload(t, target);
-    
-    if (_cancelledTransfers.contains(t.id)) {
-       print("🛑 Transfer aborted, skipping fallback.");
-       return;
-    }
+    _enqueueTransfer(() async {
+      if (_cancelledTransfers.contains(t.id)) return;
+      
+      File target = File(p.join(t.destinationPath ?? path, t.fileName));
+      bool p2pSuccess = await _tryP2PDownload(t, target);
+      
+      if (_cancelledTransfers.contains(t.id)) return;
 
-    if (p2pSuccess) {
-      _reportTransferEvent(t.id, "completed", "P2P");
-      _updateTransferStatus(t, TransferStatus.completed);
-      _notifyMessage("✨ P2P Success: ${t.fileName}");
-    } else {
-      // P2P FEHLGESCHLAGEN
-      _notifyMessage("⚠️ P2P failed via Mobile/Remote. Requesting Sender Relay...");
-      
-      // 🛑 STOP! Wir laden NICHT hoch (wir haben die Datei ja nicht).
-      // Wir bitten den Server, dem SENDER Bescheid zu sagen.
-      await _requestRelayFromSender(t.id);
-      
-      // Wir entfernen die ID aus "processed", damit wir später das Relay-Update akzeptieren
-      _processedTransferIds.remove(t.id);
-    }
+      if (p2pSuccess) {
+        _reportTransferEvent(t.id, "completed", "P2P");
+        _updateTransferStatus(t, TransferStatus.completed);
+        _notifyMessage("✨ P2P Success: ${t.fileName}");
+      } else {
+        _notifyMessage("⚠️ P2P failed. Requesting Relay...");
+        await _requestRelayFromSender(t.id);
+        _processedTransferIds.remove(t.id);
+      }
+    });
   }
 
   // Neue Hilfsmethode: Fordert den Sender auf, das Relay zu nutzen
@@ -864,11 +887,16 @@ class DataLinkService {
 
   Future<void> _handleRelayReadyTransfer(Transfer transfer, String downloadPath) async {
     _processedTransferIds.add(transfer.id);
-    final targetFile = File(p.join(downloadPath, transfer.fileName));
+    _updateTransferStatus(transfer, TransferStatus.queued); // 🔥 FIX: In UI als wartend anzeigen
     
-    _notifyMessage("☁️ Downloading from relay...");
-    await _downloadFromRelay(transfer, targetFile);
-    _updateTransferStatus(transfer, TransferStatus.completed);
+    _enqueueTransfer(() async {
+      if (_cancelledTransfers.contains(transfer.id)) return;
+      
+      final targetFile = File(p.join(downloadPath, transfer.fileName));
+      _notifyMessage("☁️ Downloading from relay...");
+      await _downloadFromRelay(transfer, targetFile);
+      _updateTransferStatus(transfer, TransferStatus.completed);
+    });
   }
 
   Future<bool> _tryP2PDownload(Transfer transfer, File targetFile) async {
@@ -892,7 +920,8 @@ class DataLinkService {
 
       final sink = targetFile.openWrite();
       int received = 0;
-      final total = response.contentLength; // Kann -1 sein, falls nicht bekannt
+      int lastNotifiedBytes = 0; // 🔥 NEU
+      final total = response.contentLength; 
 
       await for (var chunk in response) {
         if (_cancelledTransfers.contains(transfer.id)) {
@@ -902,10 +931,18 @@ class DataLinkService {
         }
         sink.add(chunk);
         received += chunk.length;
+        
         if (total > 0) {
-          _notifyProgress(transfer.id, received / total, "${_formatBytes(received)} / ${_formatBytes(total)}");
+          if (received - lastNotifiedBytes >= (512 * 1024) || received == total) {
+            // 🔥 FIX: Reiner Text, die MB-Rechnung übernimmt jetzt der Screen global!
+            _notifyProgress(transfer.id, received / total, "Downloading..."); 
+            lastNotifiedBytes = received;
+          }
         } else {
-          _notifyProgress(transfer.id, 0.5, "Downloading...");
+          if (received - lastNotifiedBytes >= (512 * 1024)) {
+            _notifyProgress(transfer.id, 0.5, "Downloading...");
+            lastNotifiedBytes = received;
+          }
         }
       }
       
@@ -1057,6 +1094,7 @@ class DataLinkService {
       request.sink.add(utf8.encode(fileHeader));
       
       int sentFileBytes = 0;
+      int lastNotifiedBytes = 0; // 🔥 NEU: Merkt sich das letzte Update
       Stream<List<int>> stream = file.openRead();
       
       await for (var chunk in stream) {
@@ -1066,9 +1104,11 @@ class DataLinkService {
         }
         request.sink.add(chunk);
         sentFileBytes += chunk.length;
-        // Updates reduzieren, um die UI flüssig zu halten
-        if (sentFileBytes % (512 * 1024) == 0 || sentFileBytes == fileSize) {
+        
+        // 🔥 FIX: Prüft, ob die Differenz größer als 512KB ist! Modulo (%) klappt bei krummen Chunks nie.
+        if (sentFileBytes - lastNotifiedBytes >= (512 * 1024) || sentFileBytes == fileSize) {
            _notifyProgress(transferId, sentFileBytes / fileSize, "Uploading...");
+           lastNotifiedBytes = sentFileBytes;
         }
       }
       
@@ -1100,12 +1140,12 @@ class DataLinkService {
     _notifyProcessingState(true);
     _notifyProgress(transfer.id, 0.0, "Relay Download...");
     try {
-      // 🔥 FIX: Auch hier den globalen Client für pfeilschnelle Keep-Alive Downloads!
       final request = http.Request('GET', Uri.parse('$serverBaseUrl/download/relay/${transfer.id}'));
       final response = await _httpClient.send(request);
       
       final sink = targetFile.openWrite();
       int received = 0;
+      int lastNotifiedBytes = 0; // 🔥 NEU
       final total = response.contentLength ?? transfer.fileSize;
       
       await for (var chunk in response.stream) {
@@ -1115,19 +1155,16 @@ class DataLinkService {
         }
         sink.add(chunk);
         received += chunk.length;
-        _notifyProgress(transfer.id, received / total, "Downloading...");
+        
+        // 🔥 FIX: Auch hier die zuverlässige Delta-Messung
+        if (received - lastNotifiedBytes >= (512 * 1024) || received == total) {
+           _notifyProgress(transfer.id, received / total, "Downloading...");
+           lastNotifiedBytes = received;
+        }
       }
       await sink.close();
       await _reportTransferEvent(transfer.id, "completed", "Relay Download");
       _notifyMessage("✅ Downloaded: ${transfer.fileName}");
-    } catch (e) {
-      // 🔥 FIX: Teildatei löschen und keine rote Meldung werfen
-      if (e.toString().contains("CANCELLED_BY_USER") || _cancelledTransfers.contains(transfer.id)) {
-        print("🛑 Download properly aborted.");
-        try { if (targetFile.existsSync()) await targetFile.delete(); } catch (_) {}
-      } else {
-        _notifyMessage("Download error: $e", isError: true);
-      }
     } finally {
       _notifyProcessingState(false);
     }

@@ -58,6 +58,7 @@ class _DataLinkScreenState extends State<DataLinkScreen> with WidgetsBindingObse
   List<String> _customPaths = [];
   bool _serviceStarted = false;
   String? _currentTransferId;
+  final Set<String> _currentBatchIds = {};
 
   @override
   void initState() {
@@ -145,7 +146,7 @@ Future<void> _initializeServices() async {
   }
 
   void _setupDataLinkListeners() {
-    // 1. TRANSFER LISTENER (Aktualisiert die Liste der Transfers)
+    // 1. TRANSFER LISTENER
     _datalink.addTransferListener((transfer) {
       if (mounted) {
         setState(() {
@@ -155,17 +156,20 @@ Future<void> _initializeServices() async {
           } else {
             _transfers.insert(0, transfer);
           }
+          
+          // 🔥 BATCH-TRACKING: Neu in die Schlange aufnehmen
+          if (transfer.status == TransferStatus.queued || transfer.isActive) {
+             _currentBatchIds.add(transfer.id);
+          }
         });
       }
     });
 
-    // 2. PROGRESS LISTENER (Aktualisiert Ladebalken & Overlay)
+    // 2. PROGRESS LISTENER (Mit globaler MB-Berechnung)
     _datalink.addProgressListener((id, progress, message) {
       if (mounted) {
         setState(() {
-          _currentTransferId = id; // 🔥 HIER wird die ID für den Cancel-Button gespeichert
-          _progressValue = progress;
-          _progressMessage = message ?? "";
+          _currentTransferId = id;
           
           if (message != null) {
             final lowerMsg = message.toLowerCase();
@@ -174,39 +178,59 @@ Future<void> _initializeServices() async {
             else if (lowerMsg.contains("zip")) _progressMode = ProgressBarMode.zipping;
             else if (lowerMsg.contains("upload")) _progressMode = ProgressBarMode.uploading;
           }
+
+          // 🔥 GLOBALE BERECHNUNG ALLER DATEIEN IN DER SCHLANGE
+          int totalBytes = 0;
+          double transferredBytes = 0;
+          
+          for (var t in _transfers) {
+            if (_currentBatchIds.contains(t.id)) {
+              // Abgebrochene/Fehlerhafte Dateien aus der Rechnung nehmen
+              if (t.status == TransferStatus.failed || t.status == TransferStatus.cancelled) {
+                continue; 
+              }
+              
+              totalBytes += t.fileSize;
+              double p = t.isCompleted ? 1.0 : t.progress;
+              if (p.isNaN || p.isInfinite) p = 0.0;
+              
+              transferredBytes += (t.fileSize * p);
+            }
+          }
+          
+          if (totalBytes > 0) {
+            _progressValue = transferredBytes / totalBytes;
+            String transMb = (transferredBytes / 1024 / 1024).toStringAsFixed(1);
+            String totalMb = (totalBytes / 1024 / 1024).toStringAsFixed(1);
+            
+            // Text bereinigen und MB anhängen (z.B. "Uploading... (15.2 / 50.0 MB)")
+            String baseMsg = message?.split('(').first.trim() ?? "Processing...";
+            _progressMessage = "$baseMsg ($transMb / $totalMb MB)";
+          } else {
+            _progressValue = progress;
+            _progressMessage = message ?? "Processing...";
+          }
         });
         
         _updateOverlayService();
-
-        if (progress >= 1.0 && _isProcessing) {
-           OverlayForegroundService.showCompletionNotification(
-             message ?? "Transfer successfully finished."
-           );
-        }
       }
     });
 
-    // 3. MESSAGE LISTENER (Für Popups unten am Bildschirmrand)
+    // 3. MESSAGE LISTENER
     _datalink.addMessageListener((message, isError) {
       _showSnack(message, isError: isError);
       if (isError && Platform.isAndroid) {
-         OverlayForegroundService.showStatusNotification(
-           title: "❌ Transfer Failed", 
-           body: message
-         );
-         OverlayForegroundService.updateOverlay(
-           status: "Ready", 
-           progress: 0.0, 
-           mode: "idle"
-         );
+         OverlayForegroundService.showStatusNotification(title: "❌ Transfer Failed", body: message);
+         OverlayForegroundService.updateOverlay(status: "Ready", progress: 0.0, mode: "idle");
       }
     });
 
-    // 4. HISTORY CLEARED LISTENER (Wenn der Server den Log löscht)
+    // 4. HISTORY CLEARED
     _datalink.addHistoryClearedListener(() {
       if (mounted) {
         setState(() {
           _transfers.clear();
+          _currentBatchIds.clear(); // 🔥 Batch leeren
           _progressValue = 0.0;
           _progressMessage = "";
           _isProcessing = false;
@@ -215,26 +239,27 @@ Future<void> _initializeServices() async {
       }
     });
 
-    // 5. PROCESSING LISTENER (Sagt uns, ob gerade generell gearbeitet wird)
+    // 5. PROCESSING LISTENER
     _datalink.addProcessingListener((isProcessing) {
       if (mounted) {
-        setState(() => _isProcessing = isProcessing);
+        setState(() {
+          _isProcessing = isProcessing;
+          
+          // 🔥 Wenn alles fertig ist, setzen wir den Batch für die nächste Runde zurück
+          bool hasQueued = _transfers.any((t) => t.status == TransferStatus.queued);
+          if (!isProcessing && !hasQueued) {
+            _currentBatchIds.clear();
+          }
+        });
         
         if (isProcessing) {
           if (Platform.isAndroid) {
-            OverlayForegroundService.showStatusNotification(
-              title: "🚀 Transfer Started",
-              body: "Processing files...",
-            );
+            OverlayForegroundService.showStatusNotification(title: "🚀 Transfer Started", body: "Processing files...");
           }
           _ensureOverlayServiceStarted();
         } else {
           if (Platform.isAndroid) {
-            OverlayForegroundService.updateOverlay(
-              status: "QualityLink Ready",
-              progress: 0.0,
-              mode: "idle",
-            );
+            OverlayForegroundService.updateOverlay(status: "QualityLink Ready", progress: 0.0, mode: "idle");
           }
         }
       }
@@ -477,6 +502,28 @@ Future<void> _pickAndSendFiles() async {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const SizedBox(height: 20),
+
+                    // 🔥 DIE SMARTE WARTESCHLANGEN-PROGRESSBAR
+                    if (_isProcessing || _transfers.any((t) => t.status == TransferStatus.queued || t.status == TransferStatus.offered))
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16).copyWith(bottom: 16),
+                        child: FuturisticProgressBar(
+                          progress: _progressValue,
+                          label: _progressMessage.isNotEmpty ? _progressMessage : "PROCESSING QUEUE...",
+                          mode: _progressMode,
+                          // Smarter Subtitle, der die Schlange zählt:
+                          subtitle: (() {
+                            int queued = _transfers.where((t) => t.status == TransferStatus.queued).length;
+                            if (queued > 0) return "$queued ITEMS WAITING IN QUEUE";
+                            return "TRANSFER ACTIVE";
+                          })(),
+                          // Wenn man auf das X klickt, bricht der aktuelle ab und der nächste in der Schlange startet!
+                          onCancel: _currentTransferId != null ? () {
+                            _datalink.cancelTransfer(_currentTransferId!);
+                          } : null,
+                        ),
+                      ),
+
                     _buildPathSelector(),
                     const Divider(color: Colors.white10), // Subtiler
                     if (sameLanPeers.isNotEmpty) ...[
