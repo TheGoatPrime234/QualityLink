@@ -250,7 +250,7 @@ class FileServerService {
     }
 
     try {
-      final entities = dir.listSync();
+      final entities = dir.listSync(followLinks: false); // 🔥 FIX 1
       final fileList = [];
 
       for (var entity in entities) {
@@ -335,8 +335,8 @@ class FileServerService {
   ) async {
     if (results.length >= limit) return;
 
-    try {
-      final entities = dir.listSync(recursive: false); // Nicht direkt rekursiv, um Kontrolle zu behalten
+   try {
+      final entities = dir.listSync(recursive: false, followLinks: false); // 🔥 FIX 2
       
       for (var entity in entities) {
         if (results.length >= limit) break;
@@ -659,7 +659,7 @@ class FileServerService {
     if (indexList.length > 5000) return; // Limit, damit JSON nicht explodiert
 
     try {
-      final entities = dir.listSync(recursive: false);
+      final entities = dir.listSync(recursive: false, followLinks: false); // 🔥 FIX 3
       for (var entity in entities) {
         if (p.basename(entity.path).startsWith('.')) continue; // Versteckte ignorieren
 
