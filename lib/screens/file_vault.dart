@@ -419,7 +419,7 @@ Widget _buildFileItem(BuildContext context, FileVaultController controller, VfsN
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    node.name,
+                    _getDisplayName(node.name), // 🔥 FIX: Hier wendest du deine Funktion an!
                     style: GoogleFonts.rajdhani(
                       color: node.isSelected ? AppColors.primary : Colors.white,
                       fontSize: 16, fontWeight: FontWeight.w600,
@@ -615,5 +615,20 @@ Widget _buildFileItem(BuildContext context, FileVaultController controller, VfsN
         ],
       )
     );
+  }
+  // 🔥 NEU: Schneidet lange C:/ Pfade ab und zeigt nur den echten Ordnernamen
+  String _getDisplayName(String rawName) {
+    // Standard-Namen wie "HDD Storage" in Ruhe lassen
+    if (rawName == "ROOT" || rawName == "Drives" || rawName == "HDD Storage") {
+      return rawName;
+    }
+    
+    // Zerschneidet den Text bei jedem "/" oder "\" und nimmt das allerletzte Wort
+    final parts = rawName.split(RegExp(r'[/\\]')).where((s) => s.trim().isNotEmpty).toList();
+    if (parts.isNotEmpty) {
+      return parts.last;
+    }
+    
+    return rawName;
   }
 }
