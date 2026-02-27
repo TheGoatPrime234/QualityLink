@@ -115,6 +115,22 @@ class DeviceManager extends ChangeNotifier {
             clipboardEntries: d['clipboard_entries'] ?? 0,
           );
         }).toList();
+        try {
+          final serverNode = storageData.firstWhere((s) => s['client_id'] == 'SERVER', orElse: () => null);
+          if (serverNode != null) {
+            _devices.insert(0, NetworkDevice(
+              id: 'SERVER',
+              name: serverNode['name'] ?? 'QualityLink Core',
+              type: 'server', // Eigener Typ für den Pi
+              ip: serverNode['ip'] ?? '0.0.0.0',
+              isOnline: true,
+              isSameLan: true,
+              fileServerPort: serverNode['file_server_port'] ?? 8000,
+            ));
+          }
+        } catch (e) {
+          print("Could not add server node: $e");
+        }
 
         notifyListeners(); // Sagt der ganzen App bescheid!
       }

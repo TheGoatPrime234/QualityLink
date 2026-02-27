@@ -414,6 +414,8 @@ class _SystemMonitorScreenState extends State<SystemMonitorScreen> {
         return Icons.computer;
       case 'macos':
         return Icons.laptop_mac;
+      case 'server': 
+        return Icons.dns;
       case 'linux':
         return Icons.desktop_mac;
       default:

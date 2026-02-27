@@ -154,7 +154,7 @@ Future<void> _initializeServices() async {
     );
     
     final otherDevices = DeviceManager().devices
-        .where((d) => d.id != widget.clientId)
+        .where((d) => d.id != widget.clientId && d.id != "SERVER") 
         .toList();
         
     setState(() {
